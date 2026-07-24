@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AIO Agent Runtime</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="https://unpkg.com/highlight.js@11.10.0/styles/github-dark.min.css">
+  <script src="https://unpkg.com/marked@14.1.3/marked.min.js"></script>
+  <script src="https://unpkg.com/dompurify@3.1.7/dist/purify.min.js"></script>
+  <script src="https://unpkg.com/highlight.js@11.10.0/highlight.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#chatMessages">跳到聊天内容</a>
+
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" id="sidebar" aria-label="工作区导航">
+      <button class="workspace-switcher" id="workspaceButton" type="button" aria-label="当前工作区">
+        <span class="workspace-mark" aria-hidden="true">A</span>
+        <span class="workspace-copy">
+          <strong>AIO Runtime</strong>
+          <span id="modelLabel">正在连接</span>
+        </span>
+        <i data-lucide="chevrons-up-down" aria-hidden="true"></i>
+      </button>
+
+      <div class="quick-actions">
+        <button class="sidebar-button primary" id="newSessionButton" type="button">
+          <i data-lucide="square-pen" aria-hidden="true"></i><span>新建会话</span>
+          <kbd>Ctrl N</kbd>
+        </button>
+        <button class="sidebar-button" id="searchButton" type="button">
+          <i data-lucide="search" aria-hidden="true"></i><span>搜索</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+      </div>
+
+      <nav class="workspace-nav" aria-label="主要导航">
+        <p class="nav-label">Workspace</p>
+        <button type="button" class="sidebar-button active" data-nav-target="chat">
+          <i data-lucide="inbox" aria-hidden="true"></i><span>工作台</span>
+        </button>
+        <button type="button" class="sidebar-button" data-nav-target="trace">
+          <i data-lucide="activity" aria-hidden="true"></i><span>运行记录</span>
+          <span class="nav-count" id="eventCount">0</span>
+        </button>
+        <button type="button" class="sidebar-button" data-nav-target="files">
+          <i data-lucide="files" aria-hidden="true"></i><span>文件</span>
+        </button>
+      </nav>
+
+      <section class="recents" aria-labelledby="recentsTitle">
+        <div class="section-heading">
+          <p id="recentsTitle">最近会话</p>
+          <button class="compact-button" id="refreshSessionsButton" type="button" title="刷新会话" aria-label="刷新会话">
+            <i data-lucide="refresh-cw" aria-hidden="true"></i>
+          </button>
+        </div>
+        <nav class="session-list" id="sessionList" aria-label="最近会话"></nav>
+      </section>
+
+      <div class="sidebar-footer">
+        <button class="sidebar-button" id="settingsButton" type="button">
+          <i data-lucide="settings" aria-hidden="true"></i><span>设置</span>
+        </button>
+        <div class="sidebar-runtime" aria-hidden="true">
+          <span class="status-dot"></span><span id="sidebarRuntimeLabel">连接中</span>
+        </div>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <div class="topbar-leading">
+        <button class="icon-button" id="sidebarToggle" type="button" title="折叠侧栏 (Ctrl+B)" aria-label="折叠侧栏">
+          <i data-lucide="panel-left" aria-hidden="true"></i>
+        </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <div class="session-heading">
+          <span class="session-icon" aria-hidden="true"><i data-lucide="message-square"></i></span>
+          <h1 id="sessionTitle">新会话</h1>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="runtime-state" id="runtimeState" type="button" aria-label="打开运行时设置">
+          <span class="status-dot"></span><span>检查连接</span>
+        </button>
+        <button class="icon-button" id="contextToggle" type="button" title="切换上下文面板" aria-label="切换上下文面板">
+          <i data-lucide="panel-right" aria-hidden="true"></i>
+        </button>
+        <button class="icon-button" id="moreButton" type="button" title="更多操作" aria-label="更多操作">
+          <i data-lucide="ellipsis" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <main class="chat-panel" id="mainContent">
+      <div class="chat-scroll" id="chatMessages" aria-live="polite" tabindex="-1">
+        <section class="empty-state" id="emptyState">
+          <div class="empty-icon" aria-hidden="true"><i data-lucide="sparkles"></i></div>
+          <h2>开始一个会话</h2>
+          <p>描述你希望 Agent 在当前工作区完成的任务。</p>
+          <div class="suggestion-list" aria-label="任务示例">
+            <button type="button" data-prompt="检查当前项目结构，并告诉我最值得先了解的部分">
+              <i data-lucide="folder-search" aria-hidden="true"></i>
+              <span><strong>检查项目结构</strong><small>了解入口、模块和运行方式</small></span>
+              <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-prompt="列出工作区中的文件，并按用途分类">
+              <i data-lucide="files" aria-hidden="true"></i>
+              <span><strong>浏览工作区文件</strong><small>查看 Sandbox 中的当前内容</small></span>
+              <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-prompt="运行一次简单的 Python 计算并解释执行过程">
+              <i data-lucide="terminal-square" aria-hidden="true"></i>
+              <span><strong>运行 Agent 任务</strong><small>观察规划和工具调用事件</small></span>
+              <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="chatForm">
+          <label class="sr-only" for="messageInput">发送给 Agent 的任务</label>
+          <textarea id="messageInput" rows="1" maxlength="20000" placeholder="让 Agent 完成一项任务…" required></textarea>
+          <div class="composer-footer">
+            <div class="composer-tools">
+              <button class="composer-icon" id="attachContextButton" type="button" title="添加上下文" aria-label="添加上下文">
+                <i data-lucide="paperclip" aria-hidden="true"></i>
+              </button>
+              <label class="model-select-wrap" title="当前会话使用的模型（来自 config/models.json）">
+                <i data-lucide="cpu" aria-hidden="true"></i>
+                <select id="modelSelect" aria-label="选择模型"></select>
+              </label>
+              <button class="mode-pill" id="modeButton" type="button" title="在设置中切换 Agent 模式">
+                <i data-lucide="bot" aria-hidden="true"></i><span id="modeLabel">单 Agent</span>
+              </button>
+            </div>
+            <div class="composer-actions">
+              <span class="send-hint">Enter 发送</span>
+              <button class="send-button" id="sendButton" type="submit" title="发送任务" aria-label="发送任务">
+                <i data-lucide="arrow-up" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+        </form>
+        <p class="composer-note">Agent 可能会出错，请检查重要结果。</p>
+      </div>
+    </main>
+
+    <aside class="context-panel" id="contextPanel" aria-label="上下文面板" aria-hidden="true">
+      <header class="context-header">
+        <div>
+          <span class="eyebrow">CONTEXT</span>
+          <h2 id="contextTitle">文件</h2>
+        </div>
+        <button class="icon-button" id="closeContextButton" type="button" title="关闭上下文" aria-label="关闭上下文">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="context-tabs" role="tablist" aria-label="上下文视图">
+        <button type="button" class="context-tab active" data-tab="files" role="tab" aria-selected="true">文件</button>
+        <button type="button" class="context-tab" data-tab="trace" role="tab" aria-selected="false">活动</button>
+      </div>
+
+      <section class="context-view active" id="filesView" data-view="files">
+        <div class="file-browser" id="fileBrowser">
+          <div class="pathbar">
+            <button class="compact-button" id="parentFolderButton" type="button" title="返回上级目录" aria-label="返回上级目录">
+              <i data-lucide="arrow-left" aria-hidden="true"></i>
+            </button>
+            <code id="currentPath">.</code>
+            <button class="compact-button" id="refreshFilesButton" type="button" title="刷新文件" aria-label="刷新文件">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="file-list" id="fileList"></div>
+        </div>
+
+        <article class="file-preview" id="filePreview" hidden>
+          <div class="preview-toolbar">
+            <button class="text-button" id="backToFilesButton" type="button"><i data-lucide="arrow-left"></i>文件列表</button>
+            <button class="compact-button" id="downloadFileButton" type="button" title="下载文件" aria-label="下载文件"><i data-lucide="download"></i></button>
+          </div>
+          <div class="preview-heading">
+            <h3 id="filePreviewTitle">文件</h3>
+            <span id="filePreviewMeta"></span>
+          </div>
+          <pre id="fileContent"></pre>
+        </article>
+      </section>
+
+      <section class="context-view" id="traceView" data-view="trace">
+        <div class="trace-summary">
+          <span>当前会话活动</span><strong id="traceCount">0</strong>
+        </div>
+        <div class="trace-list" id="traceList">
+          <p class="muted-line">尚无执行记录</p>
+        </div>
+      </section>
+    </aside>
+
+    <button class="scrim" id="scrim" type="button" aria-label="关闭面板"></button>
+  </div>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="settings-shell">
+      <header class="settings-header">
+        <div>
+          <span class="eyebrow">WORKSPACE</span>
+          <h2>设置</h2>
+        </div>
+        <button class="icon-button" id="closeSettingsButton" type="button" title="关闭设置" aria-label="关闭设置"><i data-lucide="x"></i></button>
+      </header>
+
+      <div class="settings-body">
+        <nav class="settings-nav" aria-label="设置分类">
+          <button type="button" class="active" data-settings-tab="general"><i data-lucide="sliders-horizontal"></i><span>常规</span></button>
+          <button type="button" data-settings-tab="agent"><i data-lucide="bot"></i><span>Agent</span></button>
+          <button type="button" data-settings-tab="skills"><i data-lucide="blocks"></i><span>Skills</span></button>
+          <button type="button" data-settings-tab="mcp"><i data-lucide="plug"></i><span>MCP</span></button>
+        </nav>
+
+        <div class="settings-content">
+          <section class="settings-section active" data-settings-view="general">
+            <div class="settings-title"><h3>常规</h3><p>本地 Harness 的连接与运行状态。</p></div>
+            <div class="setting-group">
+              <div class="setting-row"><div><strong>模型</strong><span>当前用于 Agent 推理的模型</span></div><code id="settingsModel">—</code></div>
+              <div class="setting-row"><div><strong>Harness</strong><span>本地编排与 API 服务</span></div><span class="status-badge" id="settingsHarness">检查中</span></div>
+              <div class="setting-row"><div><strong>Sandbox</strong><span>隔离文件和代码执行环境</span></div><span class="status-badge" id="settingsSandbox">检查中</span></div>
+              <div class="setting-row"><div><strong>工具</strong><span>当前注册到 Agent 的工具数量</span></div><span id="settingsTools">0</span></div>
+            </div>
+          </section>
+
+          <section class="settings-section" data-settings-view="agent">
+            <div class="settings-title"><h3>Agent</h3><p>设置执行模式和 Harness 访问令牌。</p></div>
+            <div class="setting-group">
+              <div class="setting-block">
+                <label>执行模式</label>
+                <div class="mode-selector" role="group" aria-label="执行模式">
+                  <button type="button" class="active" data-mode="single"><i data-lucide="bot"></i><span><strong>单 Agent</strong><small>由一个 Agent 完成整个任务</small></span></button>
+                  <button type="button" data-mode="team"><i data-lucide="users"></i><span><strong>团队模式</strong><small>由多个角色分步协作</small></span></button>
+                </div>
+              </div>
+              <div class="setting-block">
+                <label for="harnessTokenInput">Harness Token</label>
+                <input id="harnessTokenInput" type="password" autocomplete="off" placeholder="未配置时留空">
+                <p>Token 仅保存在当前浏览器的本地存储中。</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" data-settings-view="skills">
+            <div class="settings-title"><h3>Skills</h3><p>当前工作区可以匹配的业务能力。</p></div>
+            <div class="settings-list" id="skillList"><p class="muted-line">正在加载 Skills…</p></div>
+          </section>
+
+          <section class="settings-section" data-settings-view="mcp">
+            <div class="settings-title"><h3>MCP</h3><p>通过 Model Context Protocol 暴露的本地工具入口。</p></div>
+            <div class="setting-group">
+              <div class="integration-row">
+                <span class="integration-icon"><i data-lucide="plug"></i></span>
+                <div><strong id="mcpServerName">AIO Local Harness</strong><span id="mcpDescription">可选的 stdio MCP 服务</span></div>
+                <span class="status-badge" id="mcpStatus">可用</span>
+              </div>
+              <div class="tool-chips" id="mcpTools"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="settings-footer">
+        <span id="settingsSaveStatus">设置会自动保存在本地</span>
+        <button class="primary-button" id="saveSettingsButton" type="button">保存并关闭</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog id="commandDialog" class="command-dialog">
+    <div class="command-shell">
+      <label class="command-search" for="commandInput">
+        <i data-lucide="search" aria-hidden="true"></i>
+        <input id="commandInput" type="search" autocomplete="off" placeholder="搜索命令…">
+        <kbd>Esc</kbd>
+      </label>
+      <div class="command-results" id="commandResults" role="listbox" aria-label="可用命令"></div>
+      <footer><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 执行</span></footer>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
