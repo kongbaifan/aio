@@ -24,6 +24,8 @@ def test_safe_path_rejects_sibling_prefix_traversal():
         "nul.txt",           # 带扩展名也危险
         "COM1",              # 打开串口，可能挂死同步 open()
         "sub/PRN",
+        "a.txt:stash",       # NTFS 备用数据流：能写入，但 listdir 看不到、
+        "sub/b.txt:s",       # 宿主文件 st_size 也不变，等于藏文件
     ],
 )
 def test_safe_path_rejects_windows_aliases(path):
@@ -81,6 +83,23 @@ def test_token_protects_workspace_routes(monkeypatch):
     authorized = client.get("/v1/files", headers={"X-Sandbox-Token": "test-token"})
     assert authorized.status_code == 200
     monkeypatch.setattr(server, "SANDBOX_TOKEN", "")
+
+
+def test_non_ascii_token_returns_false_instead_of_raising(monkeypatch):
+    """含非 ASCII 的 token 要判为无效，而不是抛异常。
+
+    hmac.compare_digest 对非 ASCII 的 str 会抛 TypeError，在中间件里冒泡成
+    500——既泄露实现细节，也让「密码错」和「服务坏了」无法区分。
+    这里直接测 _token_is_valid：HTTP header 本身不允许非 ASCII，httpx 在客户端
+    就会拦下，走不到服务端；但 token 也可能来自别处（未来的 WebSocket 参数、
+    其他调用方），校验函数本身不能炸。
+    """
+    monkeypatch.setattr(server, "SANDBOX_TOKEN", "test-token")
+    assert server._token_is_valid("密码") is False
+    # 非 ASCII 的正确 token 同样要能通过（不因编码而误判）
+    monkeypatch.setattr(server, "SANDBOX_TOKEN", "令牌-ok")
+    assert server._token_is_valid("令牌-ok") is True
+    assert server._token_is_valid("别的") is False
 
 
 def test_write_and_read_file_are_workspace_scoped(tmp_path, monkeypatch):

@@ -116,7 +116,10 @@ class Settings:
             agent_browser_command=os.environ.get("AGENT_BROWSER_COMMAND", "").strip(),
             # 保留字段兼容旧 env；模型选择以 config/models.json 为准。
             llm_mode=os.environ.get("LLM_MODE", "models.json").strip().lower() or "models.json",
-            llm_provider=os.environ.get("LLM_PROVIDER", "").strip().lower(),
+            # 不做 .lower()：provider 名直接取自 models.json 的键，大小写敏感。
+            # 强制小写会让 provider 命名带大写时永远匹配不上；同文件的
+            # LLM_MODEL / HARNESS_MODEL 本来也没有小写化，此前是不一致的。
+            llm_provider=os.environ.get("LLM_PROVIDER", "").strip(),
             llm_model=(os.environ.get("LLM_MODEL") or os.environ.get("MODEL_NAME") or "").strip(),
             # 推荐：HARNESS_MODEL=provider/model
             harness_model=os.environ.get("HARNESS_MODEL", "").strip(),

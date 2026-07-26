@@ -81,7 +81,14 @@ def _prepare_messages(
     *,
     supports_developer_role: bool,
 ) -> list[dict[str, Any]]:
-    """按 compat 调整 system/developer 角色。"""
+    """按 compat 在 system / developer 之间转换首部指令消息。
+
+    本项目内部统一产出 role="system"。某些推理模型（o1 系及部分兼容实现）
+    只认 developer，对它们把 system 升格；其余一律降回 system。
+
+    原实现只有 developer→system 一条降级路径，而代码库里没有任何地方产出
+    developer 角色，所以整个开关是空转的；升格路径根本不存在。
+    """
     prepared: list[dict[str, Any]] = []
     for item in messages:
         msg = dict(item)
@@ -89,8 +96,7 @@ def _prepare_messages(
         if role == "developer" and not supports_developer_role:
             msg["role"] = "system"
         elif role == "system" and supports_developer_role:
-            # 保持 system；部分推理模型用 developer，本项目统一 system 更兼容
-            pass
+            msg["role"] = "developer"
         prepared.append(msg)
     return prepared
 
@@ -183,6 +189,11 @@ class OpenAICompatibleClient:
         if self.max_tokens is not None:
             field = self.model_ref.max_tokens_field or "max_tokens"
             payload[field] = self.max_tokens
+        # supportsReasoningEffort 此前解析后零引用，是个死配置：models.json 里
+        # 三个 provider 都认真配了它，实际从不生效。现在开关打开且 model 配了
+        # reasoningEffort 时才下发，两个条件缺一不可。
+        if self.model_ref.supports_reasoning_effort and self.model_ref.reasoning_effort:
+            payload["reasoning_effort"] = self.model_ref.reasoning_effort
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

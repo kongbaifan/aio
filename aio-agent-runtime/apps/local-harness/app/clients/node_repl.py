@@ -5,8 +5,13 @@ class NodeReplError(RuntimeError):
     pass
 
 
+# 同 SandboxClient：客户端超时要比请求体里给 REPL 的执行超时（默认 30000ms）宽，
+# 否则跑满时长的代码会让 httpx 先抛 ReadTimeout，盖掉服务端本来要返回的超时结果。
+DEFAULT_TIMEOUT_SECONDS = 45.0
+
+
 class NodeReplClient:
-    def __init__(self, base_url: str, timeout: float = 30.0):
+    def __init__(self, base_url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(timeout=timeout)
 

@@ -5,8 +5,15 @@ class SandboxError(RuntimeError):
     """Sandbox 返回非 2xx 或不可连接时使用的统一异常。"""
 
 
+# 客户端超时必须明显大于服务端的执行超时（SANDBOX_EXECUTION_TIMEOUT，默认 30s），
+# 否则跑满时长的代码会让两边同时到点：httpx 抛 ReadTimeout 和服务端返回
+# "Execution timed out" 谁先谁后是随机的，模型可能看到 "Sandbox unavailable"
+# 这种完全误导的错误（像是服务挂了），而不是"你的代码超时了"。
+DEFAULT_TIMEOUT_SECONDS = 45.0
+
+
 class SandboxClient:
-    def __init__(self, base_url: str, token: str = "", timeout: float = 30.0):
+    def __init__(self, base_url: str, token: str = "", timeout: float = DEFAULT_TIMEOUT_SECONDS):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout

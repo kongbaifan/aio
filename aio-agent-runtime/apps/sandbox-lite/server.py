@@ -90,7 +90,11 @@ def _request_token(request: Request) -> str:
 
 
 def _token_is_valid(token: str) -> bool:
-    return not SANDBOX_TOKEN or hmac.compare_digest(token, SANDBOX_TOKEN)
+    if not SANDBOX_TOKEN:
+        return True
+    # compare_digest 对含非 ASCII 字符的 str 会抛 TypeError，在中间件里变成
+    # 500 而不是 401。先编码成 bytes：既避免报错，也仍是常数时间比较。
+    return hmac.compare_digest(token.encode("utf-8"), SANDBOX_TOKEN.encode("utf-8"))
 
 
 # 传给用户代码的环境变量白名单，避免子进程读到 SANDBOX_TOKEN 等宿主机密钥。
@@ -204,6 +208,11 @@ def _reject_windows_alias(path: str) -> None:
         # 尾随点 / 空格：Win32 打开时会被剥掉，等价于另一个文件名。
         if part != part.rstrip(" ."):
             raise HTTPException(400, "路径段不能以点或空格结尾")
+        # NTFS 备用数据流：'a.txt:stash' 能写入，但 os.listdir 看不到、
+        # a.txt 的 st_size 也不变，等于在 workspace 里藏了个 list_files 无感的文件。
+        # 盘符（'C:'）不会走到这里——它在首段，且越界由 resolve 判定。
+        if ":" in part:
+            raise HTTPException(400, "路径段不能包含冒号（NTFS 备用数据流）")
         # 设备名判定只看点号前的主名，NUL 和 NUL.txt 一样危险。
         stem = part.split(".", 1)[0].strip().lower()
         if stem in _WIN_RESERVED:

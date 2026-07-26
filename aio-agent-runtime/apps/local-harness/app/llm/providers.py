@@ -38,8 +38,14 @@ class ModelRef:
     max_tokens: int | None = None
     context_window: int | None = None
     reasoning: bool = False
-    supports_developer_role: bool = True
-    supports_reasoning_effort: bool = True
+    # 推理强度（low / medium / high）。配了它、且 compat 打开
+    # supportsReasoningEffort 时，才会作为 reasoning_effort 下发。
+    reasoning_effort: str = ""
+    # 绝大多数 OpenAI 兼容网关只认 system，默认关闭；只有明确要求 developer
+    # 角色的模型（o1 系等）才在 compat 里打开。此前默认 True，方向是反的——
+    # 只因为当时这个开关是空转的才没出问题。
+    supports_developer_role: bool = False
+    supports_reasoning_effort: bool = False
     max_tokens_field: str = "max_tokens"
     # 流式请求是否带 stream_options.include_usage。OpenAI 兼容接口普遍支持，
     # 个别网关会因为不认这个字段直接 400，遇到就在 compat 里关掉。
@@ -102,16 +108,27 @@ def _resolve_secret_value(raw: str | None) -> str:
     if not value:
         return ""
     if value.startswith("!"):
-        completed = subprocess.run(
-            value[1:],
-            shell=True,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        try:
+            completed = subprocess.run(
+                value[1:],
+                shell=True,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # 此前没捕获，TimeoutExpired 会以原始异常逃逸出配置解析层。
+            raise ModelConfigError(f"apiKey 命令超时（15s）: {value[1:]!r}") from exc
+        except OSError as exc:
+            raise ModelConfigError(f"apiKey 命令无法执行: {value[1:]!r} — {exc}") from exc
         if completed.returncode != 0:
-            raise ModelConfigError(f"apiKey 命令执行失败: {value[1:]!r}")
+            # 带上 stderr：原来直接丢弃，用户拿不到任何诊断信息
+            #（op 未登录、命令拼错都长一个样）。
+            detail = (completed.stderr or "").strip()[:200]
+            raise ModelConfigError(
+                f"apiKey 命令执行失败: {value[1:]!r}" + (f" — {detail}" if detail else "")
+            )
         return completed.stdout.strip()
     # 仅当整段像 ENV 名时才替换；sk- / 普通字符串一律当字面量（与 pi 行为一致）
     if _looks_like_env_name(value):
@@ -392,7 +409,15 @@ class ModelRegistry:
         if isinstance(models, dict) and model_id in models:
             model_cfg = dict(models[model_id]) if isinstance(models[model_id], dict) else {"id": model_id}
         else:
-            model_cfg = {"id": model_id, "name": model_id}
+            # 此前这里静默兜底成 {"id": model_id}。配合 resolve_selection 的
+            # 「只给 provider 就填全局默认 model」，会拼出 deepseek + gpt-5.5
+            # 这种跨 provider 组合发给上游，只能拿到一个看不出根因的 400；
+            # model id 打错字同理。不如在本地就说清楚。
+            available = ", ".join(sorted(models)) if isinstance(models, dict) and models else "(无)"
+            raise ModelConfigError(
+                f"provider {provider!r} 下没有登记模型 {model_id!r}。"
+                f"当前可用: {available}"
+            )
 
         api = str(model_cfg.get("api") or provider_cfg.get("api") or "openai-completions")
         if api not in {"openai-completions", "openai"}:
@@ -438,8 +463,9 @@ class ModelRegistry:
             max_tokens=max_tokens,
             context_window=context_window,
             reasoning=bool(model_cfg.get("reasoning", False)),
-            supports_developer_role=bool(compat.get("supportsDeveloperRole", True)),
-            supports_reasoning_effort=bool(compat.get("supportsReasoningEffort", True)),
+            reasoning_effort=str(model_cfg.get("reasoningEffort") or ""),
+            supports_developer_role=bool(compat.get("supportsDeveloperRole", False)),
+            supports_reasoning_effort=bool(compat.get("supportsReasoningEffort", False)),
             max_tokens_field=str(compat.get("maxTokensField") or "max_tokens"),
             supports_stream_usage=bool(compat.get("supportsStreamUsage", True)),
         )

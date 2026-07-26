@@ -1,9 +1,23 @@
 import asyncio
+import os
 import shlex
 
 
 # 与其它 client 的 httpx 超时对齐，避免 CLI 卡死时请求永久阻塞。
 DEFAULT_TIMEOUT_SECONDS = 90
+
+
+def _split_command(command: str) -> list[str]:
+    """按平台拆分命令行。
+
+    shlex 默认是 POSIX 模式，把反斜杠当转义符：Windows 上
+    r"C:\\tools\\agent-browser.exe" 会被拆成 ['C:toolsagent-browser.exe']，
+    只要 AGENT_BROWSER_COMMAND 填原生路径就必然 FileNotFoundError。
+    Windows 上关掉 POSIX 模式并去掉残留引号。
+    """
+    if os.name == "nt":
+        return [part.strip('"') for part in shlex.split(command, posix=False)]
+    return shlex.split(command)
 
 
 class BrowserCliError(RuntimeError):
@@ -26,7 +40,7 @@ class BrowserCliClient:
             raise BrowserCliError("Browser CLI is not configured")
         # 用 create_subprocess_exec（非 shell）执行，不存在 shell 注入；模型提供的
         # 参数（如 url）在调用方 registry 处做校验，避免以 "-" 开头被当作选项解析。
-        executable = shlex.split(self.command)
+        executable = _split_command(self.command)
         process = await asyncio.create_subprocess_exec(
             *executable,
             *args,
