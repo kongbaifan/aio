@@ -6,14 +6,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+# 关键词只用来在清单里给某几条打「可能相关」的提示，不决定模型能看到什么
+# （能看到什么由 context() 的全量清单决定）。所以这里只需覆盖现有 skill 的领域；
+# 列一堆没有对应 skill 的键，只会产生永远打不中的提示。
 DOMAIN_KEYWORDS: dict[str, set[str]] = {
-    "doc": {"文档", "word", "docx", "pdf", "报告", "简历"},
-    "sheets": {"表格", "excel", "xlsx", "csv", "数据", "图表"},
-    "browser": {"浏览器", "网页", "网站", "登录", "截图", "点击"},
-    "calendar": {"日历", "日程", "会议", "预约"},
-    "mail": {"邮件", "邮箱", "mail"},
-    "ppt": {"ppt", "演示文稿", "幻灯片"},
-    "project": {"项目", "任务", "进度", "okr"},
+    "doc": {"文档", "word", "docx", "pdf", "报告", "简历", "公文", "专利"},
+    "sheets": {"表格", "excel", "xlsx", "csv", "数据", "图表", "透视", "建模", "预测"},
+    "browser": {"浏览器", "网页", "网站", "登录", "截图", "点击", "爬取"},
+    "design": {"设计", "海报", "配图", "视觉", "banner", "封面"},
 }
 
 

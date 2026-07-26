@@ -133,9 +133,9 @@ Sandbox 单独访问 `http://127.0.0.1:8081`，Harness 工作台访问 `http://1
 
 ## Skill 如何参与推理
 
-`skills/` 下每个目录一个 SKILL.md，正文是实质性的操作指南（全仓库约 6000 行），并常常引用同级或邻近 skill 的 `references/` 文档。这些内容按**渐进式披露**使用，不会整体塞进上下文：
+`skills/` 下每个目录一个 SKILL.md，正文是实质性的操作指南，并常常引用同级或邻近 skill 的 `references/` 文档。这些内容按**渐进式披露**使用，不会整体塞进上下文：
 
-1. 每轮对话的 system prompt 注入全部 30 个 skill 的 `name + description` 清单（约 3k token，加基础指令后 system prompt 共约 4k token）。
+1. 每轮对话的 system prompt 注入全部 8 个 skill 的 `name + description` 清单（2,616 字符，加基础指令后 system prompt 共 3,024 字符）。
 2. 模型自己判断任务落在哪个 skill 的领域，用 `read_skill` 读它的 SKILL.md。
 3. SKILL.md 里若要求先读某个 references 文档，模型继续 `read_skill` 取。
 
@@ -172,21 +172,32 @@ Docker 下 `var/` 挂在命名卷 `harness-var` 上，容器重建后历史仍�
 
 每次回答下方会显示本次消耗和会话累计；`/api/sessions` 和 SSE 的 `done` 帧也带 `usage`。流式请求通过 `stream_options.include_usage` 拿上游上报的数字，个别网关不认这个字段时在 provider 的 `compat` 里设 `supportsStreamUsage: false`，此时只统计调用次数。
 
-实测（`fastai/gpt-5.5`，30 个 skill）：
+每轮的固定开销（system prompt + 工具 schema），当前 8 个 skill：
 
-| 场景 | prompt | 总计 | LLM 调用 |
-|---|---|---|---|
-| 简单问答，不碰 skill | 12,375 | 12,412 | 1 |
-| 触发一次 skill 阅读 | 25,353 | 25,752 | 2 |
-| team 两步任务 | 72,647 | 73,237 | 7 |
+| 构成 | 字符数 | 占比 |
+|---|---|---|
+| skill 清单 | 2,616 | 50% |
+| 工具 schema | 2,156 | 42% |
+| 基础指令 | 406 | 8% |
+| **合计** | **5,180** | |
 
-固定开销的构成（约 10,100 字符 / 12,400 token）：
+skill 清单是随 skill 数量线性增长的那一项，所以它决定了这套机制的成本曲线。
+仓库早期带着 22 个飞书 skill（共 30 个）时实测：
 
-- skill 清单 **7,541 字符（75%）**
-- 工具 schema 2,156 字符
-- 基础指令 406 字符
+| | 30 个 skill | 8 个 skill |
+|---|---|---|
+| skill 清单 | 8,241 字符（76%） | 2,616 字符（50%） |
+| 每轮固定开销 | 10,805 字符 | **5,180 字符** |
 
-也就是说 skill 全量注入是主要成本。要压的话，把 `context()` 里每条 description 截到 120 字符可省约 2,900 字符（≈3,500 token，降 28%），代价是模型判断该读哪个 skill 的依据变少。先看数字再决定，别凭感觉砍。
+那 22 个飞书 skill 全部依赖外部 `lark-cli`，没有它一条都跑不通，却每轮都在为
+「让模型知道有这些能力」付费——移除后固定开销直接减半。
+
+**加 skill 前先算这笔账**：一条 description 平均 300 多字符，每轮都发。真正要压的时候，
+可以把 `context()` 里每条截到 120 字符，代价是模型判断该读哪个 skill 的依据变少。
+先看数字再决定，别凭感觉砍。
+
+（早期 30 个 skill 时的端到端实测，供参考：简单问答 12,412 token / 1 次调用；
+触发一次 skill 阅读 25,752 / 2 次；team 两步任务 73,237 / 7 次。）
 
 ## 安全护栏
 
