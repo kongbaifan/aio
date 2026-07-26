@@ -1,0 +1,19 @@
+{
+  "name": "aio-local-harness-frontend-tests",
+  "private": true,
+  "type": "module",
+  "description": "工作台前端的冒烟测试。app.js 没有构建步骤也没有模块化，用 jsdom 加载真实 index.html 跑整条 SSE 链路。",
+  "scripts": {
+    "test": "node --test \"tests/frontend/*.test.mjs\"",
+    "sync-vendor": "node scripts/sync-vendor.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  },
+  "dependencies": {
+    "@highlightjs/cdn-assets": "11.10.0",
+    "dompurify": "3.1.7",
+    "lucide": "0.468.0",
+    "marked": "14.1.3"
+  }
+}

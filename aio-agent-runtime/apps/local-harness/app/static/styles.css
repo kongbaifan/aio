@@ -635,6 +635,8 @@ kbd {
 .activity-event.success .event-icon { color: var(--success); }
 .activity-event.error .event-icon { color: var(--danger); }
 .activity-event.running .event-icon { color: var(--warning); }
+/* blocked = 用户拒绝或策略禁止：不是失败，用中性的静音色，别和红色错误抢注意力。 */
+.activity-event.blocked .event-icon { color: var(--text-muted); }
 .event-copy { min-width: 0; display: grid; gap: 2px; }
 .event-copy strong { overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary); font-size: 10px; font-weight: 500; white-space: nowrap; }
 .event-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1132,4 +1134,83 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.62); }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* 人工确认对话框：破坏性/执行类工具在执行前弹出。 */
+.confirm-dialog {
+  width: min(460px, 92vw);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+}
+.confirm-dialog::backdrop { background: rgba(6, 6, 10, 0.62); backdrop-filter: blur(2px); }
+.confirm-shell { display: flex; flex-direction: column; gap: 0; margin: 0; }
+.confirm-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 18px 20px 12px;
+}
+.confirm-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: rgba(224, 168, 82, 0.14);
+  color: var(--warning);
+}
+.confirm-icon svg { width: 18px; height: 18px; }
+.confirm-head h2 { margin: 0 0 2px; font-size: 15px; }
+.confirm-head p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.confirm-body { padding: 4px 20px 4px; }
+.confirm-tool {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.confirm-args {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: #14151a;
+  border: 1px solid var(--border-subtle);
+  color: #c8cad0;
+  font: 11px/1.55 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px 18px;
+}
+.confirm-actions .ghost-button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.confirm-actions .ghost-button:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+/* 一次任务的 token 用量：低调地跟在回答后面，不抢注意力但随时可查。 */
+.usage-note {
+  margin: -8px 0 18px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
 }

@@ -13,6 +13,10 @@ const state = {
   currentFile: null,
   controller: null,
   commandIndex: 0,
+  // 视图代际：每次切换/新建会话都 +1。异步收尾（被 abort 的 sendMessage、
+  // 慢一步返回的历史详情）拿它和当前值比对，不一致就说明视图已经换了，
+  // 收尾结果不能再往新会话的 DOM 和 state.events 里写。
+  viewToken: 0,
 };
 
 const elements = {};
@@ -269,6 +273,30 @@ function addMessage(role, content, isError = false) {
   scrollChatToEnd();
 }
 
+// 在对话流末尾追加一行 token 用量。skill 清单会把 system prompt 撑到上万 token，
+// 不显示出来的话完全没法判断一次任务到底花了多少。
+function appendUsageNote(usage, sessionUsage) {
+  const total = usage && usage.total_tokens;
+  const sessionTotal = sessionUsage && sessionUsage.total_tokens;
+  if (!total && !sessionTotal) return;
+  const note = document.createElement("p");
+  note.className = "usage-note";
+  if (!total) {
+    // 恢复历史会话时没有"本次"，只报累计。
+    note.textContent = `会话累计 ${sessionTotal.toLocaleString()} tokens（${sessionUsage.calls || 0} 次模型调用）`;
+  } else {
+    const prompt = (usage.prompt_tokens || 0).toLocaleString();
+    const completion = (usage.completion_tokens || 0).toLocaleString();
+    let text = `本次 ${total.toLocaleString()} tokens（输入 ${prompt} / 输出 ${completion}，${usage.calls || 0} 次模型调用）`;
+    if (sessionTotal && sessionTotal !== total) {
+      text += ` · 会话累计 ${sessionTotal.toLocaleString()}`;
+    }
+    note.textContent = text;
+  }
+  elements.chatMessages.append(note);
+  scrollChatToEnd();
+}
+
 // 创建一个空的 Agent 消息气泡，返回可持续追加文本的 handle（打字机效果）。
 // 每次 push 累积全文并重渲染 Markdown；finalize 时做最终一次渲染。
 function beginStreamingMessage() {
@@ -313,6 +341,8 @@ function beginStreamingMessage() {
 
 function eventIcon(event) {
   if (event.status === "error") return "circle-alert";
+  // blocked = 用户点了拒绝，或策略禁止执行。不是失败，但更不是"执行中"。
+  if (event.status === "blocked") return "shield-x";
   if (event.status === "running") return "loader-circle";
   if (event.type === "plan") return "list-tree";
   if (event.type === "result") return "check";
@@ -322,7 +352,69 @@ function eventIcon(event) {
 function eventStatusLabel(status) {
   if (status === "success") return "完成";
   if (status === "error") return "失败";
+  if (status === "blocked") return "已拒绝";
   return "执行中";
+}
+
+// 未决的确认弹窗。流结束（正常收尾或中断）时要能从外部把它们关掉——
+// 否则 modal <dialog> 会一直留在页面上，backdrop 吃掉所有交互，只能刷新页面。
+const pendingConfirmations = new Set();
+
+// 关闭所有未决确认框，按「已放弃」处理：不回传服务端，那边会自行超时。
+function dismissPendingConfirmations() {
+  for (const dismiss of [...pendingConfirmations]) dismiss();
+}
+
+// 弹出人工确认框：展示待执行工具与参数。
+// 返回 Promise<{approved, dismissed}>：dismissed 表示流已结束、这次询问作废，
+// 调用方据此跳过回传（此时 confirmation_id 在服务端多半已失效，POST 只会拿到 404）。
+// 用动态 <dialog>，关闭即销毁；ESC / 点遮罩视为拒绝，保证 agent 一定能收到决定。
+function askToolConfirmation(frame) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (approved, dismissed = false) => {
+      if (settled) return;
+      settled = true;
+      pendingConfirmations.delete(dismiss);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve({ approved, dismissed });
+    };
+    const dismiss = () => finish(false, true);
+    pendingConfirmations.add(dismiss);
+
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    const argsText = (() => {
+      try { return JSON.stringify(frame.arguments || {}, null, 2); } catch (_) { return "{}"; }
+    })();
+    dialog.innerHTML = `
+      <div class="confirm-shell">
+        <header class="confirm-head">
+          <span class="confirm-icon"><i data-lucide="shield-alert" aria-hidden="true"></i></span>
+          <div>
+            <strong>需要你确认</strong>
+            <span>Agent 想执行工具 <code class="confirm-tool"></code></span>
+          </div>
+        </header>
+        <pre class="confirm-args"></pre>
+        <footer class="confirm-actions">
+          <button type="button" class="text-button" data-confirm="reject">拒绝</button>
+          <button type="button" class="primary-button" data-confirm="approve">批准执行</button>
+        </footer>
+      </div>`;
+    dialog.querySelector(".confirm-tool").textContent = frame.tool || "未知工具";
+    dialog.querySelector(".confirm-args").textContent = argsText;
+    dialog.querySelector('[data-confirm="approve"]').addEventListener("click", () => finish(true));
+    dialog.querySelector('[data-confirm="reject"]').addEventListener("click", () => finish(false));
+    // ESC 关闭或点击遮罩都按拒绝处理。
+    dialog.addEventListener("cancel", event => { event.preventDefault(); finish(false); });
+    dialog.addEventListener("click", event => { if (event.target === dialog) finish(false); });
+
+    document.body.append(dialog);
+    refreshIcons();
+    dialog.showModal();
+  });
 }
 
 // 尽量把 JSON 字符串美化成多行；不是 JSON 时原样返回。
@@ -433,6 +525,9 @@ function beginActivityGroup() {
     state: details.querySelector(".activity-state"),
     details,
     count: 0,
+    // 由 pushActivityEvent 边收边标记。以前 finalize 要求调用方再传一遍 events，
+    // 而四个调用点一个都没传，定稿时必抛 TypeError（被 readSse 的 catch 吞掉了）。
+    hasError: false,
   };
 }
 
@@ -440,17 +535,18 @@ function pushActivityEvent(handle, event) {
   if (!handle) return;
   handle.list.append(buildActivityRow(event));
   handle.count += 1;
+  if (event?.status === "error") handle.hasError = true;
   refreshIcons();
   scrollChatToEnd();
 }
 
-function finalizeActivityGroup(handle, events) {
+function finalizeActivityGroup(handle) {
   if (!handle) return;
   if (!handle.count) {
     handle.group.remove();
     return;
   }
-  const hasError = events.some(event => event.status === "error");
+  const hasError = handle.hasError;
   const status = hasError ? "error" : "success";
   handle.summaryTitle.textContent = `执行了 ${handle.count} 个步骤`;
   handle.state.className = `activity-state ${status}`;
@@ -502,11 +598,16 @@ async function readSse(response, onFrame) {
       if (!line) continue;
       const payload = line.slice(5).trim();
       if (!payload) continue;
+      let frame;
       try {
-        onFrame(JSON.parse(payload));
+        frame = JSON.parse(payload);
       } catch (_) {
-        // 半帧或非 JSON 心跳直接跳过
+        continue; // 半帧或非 JSON 心跳直接跳过
       }
+      // onFrame 故意放在 try 外面：以前它也被这个 catch 罩着，
+      // 帧处理里的 TypeError 会被当成"非 JSON 心跳"静默吞掉，
+      // 打字机整段失效都没有任何报错。
+      onFrame(frame);
     }
   }
 }
@@ -525,6 +626,11 @@ async function sendMessage(message) {
   let answered = false;
   // 最终答案的流式气泡：第一个 delta 到达时懒创建。
   let stream = null;
+  // 开跑时的视图代际。收尾前比对，不一致说明用户中途切了会话，
+  // 这一轮的事件不能再写进新会话（以前 abort 后的 catch 会把刚清空的
+  // state.events 重新塞满旧事件，并往新会话里插一个"任务已停止"分组）。
+  const viewToken = state.viewToken;
+  const viewChanged = () => viewToken !== state.viewToken;
   try {
     const response = await api("/api/chat/stream", {
       method: "POST",
@@ -549,22 +655,44 @@ async function sendMessage(message) {
         pushActivityEvent(group, event);
       } else if (frame.kind === "delta") {
         // 最终答案的文本增量：逐段追加到流式气泡（打字机）。
-        if (group) finalizeActivityGroup(group);
+        // 分组定稿后必须置空：否则每个 token 都会重跑一次 finalize，把用户
+        // 手动展开的活动组强制折叠回去、每 token 扫一遍全文档换图标，
+        // 而且下一轮的工具事件会被追加进这个已经写着"已完成"的旧分组里。
+        if (group) { finalizeActivityGroup(group); group = null; }
         if (!stream) stream = beginStreamingMessage();
-        stream.append(frame.text || "");
+        stream.push(frame.text || "");
         answered = true;
       } else if (frame.kind === "answer") {
-        // 非流式兜底：只有当没走过 delta 时才整段渲染，避免与打字机重复。
-        if (group) finalizeActivityGroup(group);
-        if (!stream) {
+        if (group) { finalizeActivityGroup(group); group = null; }
+        if (frame.is_error) {
+          // 失败必须让人看见：哪怕前面已经流式吐了半截文本，也要定稿它
+          // 再补一条错误气泡，否则用户看到的是一段外观正常的截断答案。
+          if (stream) { stream.finalize(); stream = null; }
+          addMessage("assistant", frame.answer, true);
+          answered = true;
+        } else if (!stream) {
+          // 非流式兜底：没走过 delta 时才整段渲染，避免与打字机重复。
           addMessage("assistant", frame.answer);
           answered = true;
         }
+      } else if (frame.kind === "confirm") {
+        // 需要人工确认的破坏性/执行类工具：弹窗询问，用户决定后回传服务端。
+        // 这里不阻塞 SSE 读取；决定通过独立请求 resolve 服务端挂起的 agent。
+        askToolConfirmation(frame).then(({ approved, dismissed }) => {
+          // dismissed：流已经结束，这次询问作废。服务端那边会自行超时，
+          // 再 POST 只会拿到 404 并弹一个没意义的错误提示。
+          if (dismissed) return;
+          api("/api/chat/confirm", {
+            method: "POST",
+            body: JSON.stringify({ confirmation_id: frame.confirmation_id, approved }),
+          }).catch(error => showToast(error.message, true));
+        });
       } else if (frame.kind === "done") {
         if (frame.provider && frame.model) {
           setSelectedModel(frame.provider, frame.model, { persist: true, syncSelect: true });
         }
         renderFiles(frame.files || [], ".");
+        appendUsageNote(frame.usage, frame.session_usage);
       } else if (frame.kind === "error") {
         if (stream) { stream.finalize(); stream = null; }
         addMessage("assistant", frame.detail, true);
@@ -572,13 +700,12 @@ async function sendMessage(message) {
         answered = true;
       }
     });
-    if (stream) stream.finalize();
-    if (group) finalizeActivityGroup(group);
+    if (viewChanged()) return;
     state.events = [...state.events, ...roundEvents];
     renderTrace();
     await loadSessions();
   } catch (error) {
-    if (group) finalizeActivityGroup(group);
+    if (viewChanged()) return;
     state.events = [...state.events, ...roundEvents];
     if (error.name === "AbortError") {
       const event = { type: "error", name: "任务已停止", status: "error", detail: "用户取消了本次请求", timestamp: new Date().toISOString() };
@@ -591,6 +718,13 @@ async function sendMessage(message) {
       showToast(error.message, true);
     }
   } finally {
+    // 定稿和清理必须无条件执行，正常收尾和中断（断网、点停止、进程被 kill）都要走到。
+    // 以前 stream.finalize() 只在 try 的正常路径上：流一断，气泡就永远留着
+    // .streaming 的闪烁光标，看起来像还在输出。
+    if (stream) stream.finalize();
+    if (group) finalizeActivityGroup(group);
+    // 流结束后不可能再有人来 resolve 这些确认框，关掉它们，别把界面卡死。
+    dismissPendingConfirmations();
     state.controller = null;
     setBusy(false);
     elements.messageInput.focus();
@@ -622,22 +756,60 @@ async function loadSessions() {
   }
 }
 
-function selectSession(session) {
+// 切到某个会话并把历史对话渲染回来。会话存在 SQLite 里，重启后依然能点开。
+async function selectSession(session) {
+  if (state.busy) stopRequest();
+  // 作废上一轮的异步收尾，以及上一次还没回来的历史详情请求。
+  const viewToken = ++state.viewToken;
   state.sessionId = session.id;
+  state.events = [];
   setText(elements.sessionTitle, session.title);
   if (session.provider && session.model) {
     setSelectedModel(session.provider, session.model, { persist: true, syncSelect: true });
   }
+  clearTranscript();
+  renderTrace();
   loadSessions();
   closeMobilePanels();
-  showToast("已切换会话；进程重启后历史会话会清空");
+
+  try {
+    const detail = await (await api(`/api/sessions/${encodeURIComponent(session.id)}`)).json();
+    // 快速连点会话时，先发的请求可能后到；它的内容不能写进当前这个会话。
+    if (viewToken !== state.viewToken) return;
+    for (const message of detail.messages || []) {
+      if (message.role === "user" || message.role === "assistant") {
+        addMessage(message.role, String(message.content ?? ""));
+      }
+    }
+    if (!(detail.messages || []).length) {
+      elements.emptyState.hidden = false;
+    }
+    if (detail.usage?.total_tokens) {
+      appendUsageNote(null, detail.usage);
+    }
+  } catch (error) {
+    if (viewToken !== state.viewToken) return;
+    // 加载失败时也要把空状态放回来，否则对话区是一片纯空白，
+    // 除了一条几秒就消失的 toast 之外没有任何提示。
+    elements.emptyState.hidden = false;
+    showToast(`历史消息加载失败：${error.message}`, true);
+  }
+}
+
+// 清空对话区（消息、活动分组、用量行），保留空状态占位。
+function clearTranscript() {
+  elements.chatMessages
+    .querySelectorAll(".message, .activity-group, .usage-note")
+    .forEach(item => item.remove());
+  elements.emptyState.hidden = true;
 }
 
 function newSession() {
   if (state.busy) stopRequest();
+  state.viewToken += 1; // 同上：作废上一轮被 abort 的收尾
   state.sessionId = null;
   state.events = [];
-  elements.chatMessages.querySelectorAll(".message, .activity-group").forEach(item => item.remove());
+  clearTranscript();
   elements.emptyState.hidden = false;
   setText(elements.sessionTitle, "新会话");
   renderTrace();

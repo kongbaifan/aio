@@ -1,0 +1,30 @@
+{
+  "note": "由 npm run sync-vendor 生成，请勿手工编辑",
+  "assets": [
+    {
+      "file": "marked.min.js",
+      "package": "marked",
+      "version": "14.1.3"
+    },
+    {
+      "file": "purify.min.js",
+      "package": "dompurify",
+      "version": "3.1.7"
+    },
+    {
+      "file": "highlight.min.js",
+      "package": "@highlightjs/cdn-assets",
+      "version": "11.10.0"
+    },
+    {
+      "file": "github-dark.min.css",
+      "package": "@highlightjs/cdn-assets",
+      "version": "11.10.0"
+    },
+    {
+      "file": "lucide.min.js",
+      "package": "lucide",
+      "version": "0.468.0"
+    }
+  ]
+}

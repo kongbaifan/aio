@@ -13,13 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
-from .base import AssistantTurn, TextDelta, ToolCall
+from .base import AssistantTurn, TextDelta, ToolCall, Usage
 from .providers import ModelRef
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,29 @@ class LlmError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+# 常见密钥形态：sk- / key- / Bearer xxx / AIza / GitHub token / Slack token。
+# one-api 系网关的错误体经常回显请求头甚至完整请求，这里先脱敏再进异常消息。
+_SECRET_PATTERN = re.compile(
+    r"(sk-[A-Za-z0-9_-]{8,}|key-[A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._~+/-]{8,}"
+    r"|AIza[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})"
+)
+
+# 进异常消息（进而进 SSE error 帧和审计日志）的上游响应体上限。
+# 诊断只需要开头一小段：更长的内容徒增日志体积，还扩大回显面。
+_ERROR_BODY_LIMIT = 200
+
+
+def _sanitize_upstream(text: str, limit: int = _ERROR_BODY_LIMIT) -> str:
+    """截短并脱敏上游响应体。
+
+    这些文本最终会走两条路：SSE error 帧发到浏览器、audit.write 落进
+    var/audit.jsonl。网关的错误体常常回显请求头 / token 前缀，等于把密钥写进
+    日志，所以先截短、再抹掉疑似密钥，宁可多挡不可漏。
+    """
+    snippet = (text or "")[:limit]
+    return _SECRET_PATTERN.sub("[REDACTED]", snippet)
 
 
 def _normalize_chat_url(base_url: str) -> str:
@@ -83,12 +107,16 @@ class OpenAICompatibleClient:
         max_tokens: int | None = None,
         max_retries: int = 2,
         provider: str = "custom",
+        http_client: httpx.AsyncClient | None = None,
     ):
         if model is not None:
             self.model_ref = model
         else:
             if not api_key:
-                raise ValueError("LLM_API_KEY is required for openai-compatible mode")
+                raise ValueError(
+                    "api_key is required：请在 config/models.json 对应 provider 下配置 apiKey"
+                    "（写环境变量名，值放进 .env）"
+                )
             if not base_url or not model_id:
                 raise ValueError("base_url and model are required")
             self.model_ref = ModelRef(
@@ -104,7 +132,8 @@ class OpenAICompatibleClient:
         self.temperature = temperature
         self.max_tokens = max_tokens if max_tokens is not None else self.model_ref.max_tokens
         self.max_retries = max(0, max_retries)
-        self._client = httpx.AsyncClient(timeout=timeout)
+        # http_client 仅供测试注入 MockTransport；生产路径不传，走默认真实客户端。
+        self._client = http_client or httpx.AsyncClient(timeout=timeout)
 
     @property
     def model(self) -> str:
@@ -153,6 +182,9 @@ class OpenAICompatibleClient:
             payload["tool_choice"] = "auto"
         if stream:
             payload["stream"] = True
+            if self.model_ref.supports_stream_usage:
+                # 让上游在最后一个 chunk 里附带 usage；该 chunk 的 choices 为空数组。
+                payload["stream_options"] = {"include_usage": True}
         return payload
 
     async def _request_json(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -174,7 +206,7 @@ class OpenAICompatibleClient:
                     await asyncio.sleep(wait)
                     continue
                 if response.status_code >= 400:
-                    body = response.text[:2000]
+                    body = _sanitize_upstream(response.text)
                     raise LlmError(
                         f"LLM request failed: HTTP {response.status_code} — {body}",
                         status_code=response.status_code,
@@ -183,7 +215,9 @@ class OpenAICompatibleClient:
                 try:
                     return response.json()
                 except ValueError as exc:
-                    raise LlmError(f"LLM returned non-JSON body: {response.text[:500]}") from exc
+                    raise LlmError(
+                        f"LLM returned non-JSON body: {_sanitize_upstream(response.text)}"
+                    ) from exc
             except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt < self.max_retries:
@@ -231,8 +265,16 @@ class OpenAICompatibleClient:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise LlmError(f"LLM response missing choices[0].message: {data!r}"[:500]) from exc
-        return self._parse_assistant_message(message)
+            raise LlmError(
+                f"LLM response missing choices[0].message: {_sanitize_upstream(repr(data))}"
+            ) from exc
+        turn = self._parse_assistant_message(message)
+        usage = Usage.from_payload(data.get("usage"))
+        return AssistantTurn(
+            content=turn.content,
+            tool_calls=turn.tool_calls,
+            usage=usage if usage.calls else Usage(calls=1),
+        )
 
     async def respond_stream(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -246,12 +288,15 @@ class OpenAICompatibleClient:
         url = _normalize_chat_url(self.model_ref.base_url)
         payload = self._build_payload(messages, tools, stream=True)
         content = ""
+        usage = Usage()
         # 按 index 累积 tool_call 分片：{index: {"id","name","arguments"}}
         tool_fragments: dict[int, dict[str, str]] = {}
         try:
             async with self._client.stream("POST", url, headers=self._headers(), json=payload) as response:
                 if response.status_code >= 400:
-                    body = (await response.aread()).decode("utf-8", errors="replace")[:2000]
+                    body = _sanitize_upstream(
+                        (await response.aread()).decode("utf-8", errors="replace")
+                    )
                     raise LlmError(
                         f"LLM stream failed: HTTP {response.status_code} — {body}",
                         status_code=response.status_code,
@@ -267,6 +312,9 @@ class OpenAICompatibleClient:
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
+                    # include_usage 的最后一个 chunk 里 choices 为空、只带 usage
+                    if chunk.get("usage"):
+                        usage = Usage.from_payload(chunk["usage"])
                     delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
                     piece = delta.get("content") or ""
                     if piece:
@@ -307,9 +355,17 @@ class OpenAICompatibleClient:
                     arguments=arguments,
                 )
             )
-        yield AssistantTurn(content=content, tool_calls=calls)
+        if usage.calls == 0:
+            # 上游没上报 usage（不支持 include_usage 等），至少记下发生过一次调用，
+            # 免得统计看起来像「一次都没调」。
+            usage = Usage(calls=1)
+        yield AssistantTurn(content=content, tool_calls=calls, usage=usage)
 
     async def complete(self, system: str, user: str) -> str:
+        text, _ = await self.complete_with_usage(system, user)
+        return text
+
+    async def complete_with_usage(self, system: str, user: str) -> tuple[str, Usage]:
         data = await self._request_json(
             self._build_payload(
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -319,8 +375,11 @@ class OpenAICompatibleClient:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise LlmError(f"LLM response missing choices[0].message: {data!r}"[:500]) from exc
-        return str(message.get("content") or "")
+            raise LlmError(
+                f"LLM response missing choices[0].message: {_sanitize_upstream(repr(data))}"
+            ) from exc
+        usage = Usage.from_payload(data.get("usage"))
+        return str(message.get("content") or ""), (usage if usage.calls else Usage(calls=1))
 
     async def stream_text(self, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
         """流式输出纯文本（无 tools），yield 累计全文。"""
@@ -330,7 +389,9 @@ class OpenAICompatibleClient:
         try:
             async with self._client.stream("POST", url, headers=self._headers(), json=payload) as response:
                 if response.status_code >= 400:
-                    body = (await response.aread()).decode("utf-8", errors="replace")[:2000]
+                    body = _sanitize_upstream(
+                        (await response.aread()).decode("utf-8", errors="replace")
+                    )
                     raise LlmError(
                         f"LLM stream failed: HTTP {response.status_code} — {body}",
                         status_code=response.status_code,
