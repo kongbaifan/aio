@@ -24,6 +24,11 @@ class AgentEvent(BaseModel):
     detail: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: str = Field(default_factory=utc_now_iso)
+    # 工具调用的 id（来自模型的 tool_call.id）。同一次调用会先发 running、
+    # 再发终态（success / error / blocked）两条事件，前端靠这个 id 把后者
+    # 替换掉前者，而不是把同一次调用渲染成两行。
+    # 非工具事件（plan / result / 整体 error）为空。
+    call_id: str = ""
 
 
 class ChatResponse(BaseModel):

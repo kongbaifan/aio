@@ -232,6 +232,7 @@ class AgentRunner:
                     status="running",
                     detail="模型请求执行工具",
                     payload={"arguments": call.arguments},
+                    call_id=call.id,
                 )
                 if self.require_confirmation and self.tools.requires_confirmation(call.name):
                     # 有 confirmer（交互式路径）：弹窗询问用户，批准才执行。
@@ -265,7 +266,13 @@ class AgentRunner:
                             "tool.blocked",
                             {"session_id": session.id, "tool": call.name, "arguments": call.arguments},
                         )
-                        yield AgentEvent(type="tool", name=call.name, status="blocked", detail=output[:TOOL_DETAIL_LIMIT])
+                        yield AgentEvent(
+                            type="tool",
+                            name=call.name,
+                            status="blocked",
+                            detail=output[:TOOL_DETAIL_LIMIT],
+                            call_id=call.id,
+                        )
                         continue
                     await self.audit.write(
                         "tool.approved",
@@ -289,7 +296,13 @@ class AgentRunner:
                     "tool.call",
                     {"session_id": session.id, "tool": call.name, "status": status, "arguments": call.arguments},
                 )
-                yield AgentEvent(type="tool", name=call.name, status=status, detail=output[:TOOL_DETAIL_LIMIT])
+                yield AgentEvent(
+                    type="tool",
+                    name=call.name,
+                    status=status,
+                    detail=output[:TOOL_DETAIL_LIMIT],
+                    call_id=call.id,
+                )
 
         message_id = uuid.uuid4().hex[:8]
         error = f"工具调用超过 {self.max_rounds} 轮限制（trace={message_id}）。"

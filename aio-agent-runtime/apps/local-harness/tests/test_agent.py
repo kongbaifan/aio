@@ -69,6 +69,87 @@ def test_agent_calls_tools(tmp_path):
     assert matched == []
 
 
+def test_tool_events_carry_call_id_for_pairing(tmp_path):
+    """同一次工具调用的 running 与终态必须带同一个 call_id。
+
+    前端靠它把终态行替换掉 running 行；缺了这个 id，一次调用会渲染成两行、
+    其中一条永远停在「执行中」，分组标题的步骤数也会翻倍。
+    """
+    runner = AgentRunner(
+        ToolRegistry(FakeSandbox(), FakeNode(), FakeBrowser()),
+        SkillRegistry((tmp_path,)),
+        SessionStore(),
+        AuditLogger(tmp_path / "audit.jsonl"),
+        max_rounds=4,
+    )
+    model = ScriptedModel(
+        [
+            AssistantTurn(
+                tool_calls=[
+                    ToolCall("call_a", "list_files", {"path": "."}),
+                    ToolCall("call_b", "read_file", {"path": "a.txt"}),
+                ]
+            ),
+            AssistantTurn(content="做完了"),
+        ]
+    )
+
+    _, _, events, _ = asyncio.run(runner.run("两个工具", model))
+
+    tool_events = [event for event in events if event.type == "tool"]
+    # 两个工具 × (running + 终态)
+    assert len(tool_events) == 4
+    by_call: dict[str, list[str]] = {}
+    for event in tool_events:
+        assert event.call_id, f"{event.name} 的事件缺少 call_id"
+        by_call.setdefault(event.call_id, []).append(event.status)
+    assert by_call == {"call_a": ["running", "success"], "call_b": ["running", "success"]}
+
+
+def test_blocked_event_also_carries_call_id(tmp_path):
+    """被策略拒绝的工具同样要能和它的 running 行配对。"""
+    runner = AgentRunner(
+        ToolRegistry(FakeSandbox(), FakeNode(), FakeBrowser()),
+        SkillRegistry((tmp_path,)),
+        SessionStore(),
+        AuditLogger(tmp_path / "audit.jsonl"),
+        max_rounds=4,
+        require_confirmation=True,
+    )
+    model = ScriptedModel(
+        [
+            AssistantTurn(tool_calls=[ToolCall("call_w", "write_file", {"path": "a.txt", "content": "x"})]),
+            AssistantTurn(content="已停止"),
+        ]
+    )
+
+    _, _, events, _ = asyncio.run(runner.run("写文件", model))
+
+    statuses = {
+        event.status: event.call_id for event in events if event.type == "tool"
+    }
+    assert statuses["running"] == "call_w"
+    assert statuses["blocked"] == "call_w"
+
+
+def test_non_tool_events_have_no_call_id(tmp_path):
+    """plan / result / 整体 error 不是工具调用，不该带 call_id。"""
+    runner = AgentRunner(
+        ToolRegistry(FakeSandbox(), FakeNode(), FakeBrowser()),
+        SkillRegistry((tmp_path,)),
+        SessionStore(),
+        AuditLogger(tmp_path / "audit.jsonl"),
+        max_rounds=4,
+    )
+    model = ScriptedModel([AssistantTurn(content="直接回答")])
+
+    _, _, events, _ = asyncio.run(runner.run("问一句", model))
+
+    for event in events:
+        if event.type != "tool":
+            assert event.call_id == ""
+
+
 def test_require_confirmation_blocks_destructive_tools(tmp_path):
     sandbox = FakeSandbox()
     tools = ToolRegistry(sandbox, FakeNode(), FakeBrowser())

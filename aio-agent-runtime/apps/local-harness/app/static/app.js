@@ -488,8 +488,33 @@ function buildActivityRow(event) {
   return row;
 }
 
-function addActivityGroup(events) {
-  if (!events?.length) return;
+// 把事件流按 call_id 折叠成「每次工具调用只留最新状态」。
+// 同一次调用会产生 running + 终态两条事件，整段渲染时（历史、运行记录面板）
+// 不折叠的话，一次调用会显示成两条，其中一条永远停在「执行中」。
+// 没有 call_id 的事件（plan / result / 整体 error）原样保留。
+function collapseByCall(events) {
+  const result = [];
+  const indexByCall = new Map();
+  for (const event of events || []) {
+    const callId = event?.call_id || "";
+    if (!callId) {
+      result.push(event);
+      continue;
+    }
+    const at = indexByCall.get(callId);
+    if (at === undefined) {
+      indexByCall.set(callId, result.length);
+      result.push(event);
+    } else {
+      result[at] = event; // 后到的状态覆盖先前的
+    }
+  }
+  return result;
+}
+
+function addActivityGroup(rawEvents) {
+  const events = collapseByCall(rawEvents);
+  if (!events.length) return;
   const hasError = events.some(event => event.status === "error");
   const hasRunning = events.some(event => event.status === "running");
   const status = hasError ? "error" : hasRunning ? "warning" : "success";
@@ -539,13 +564,28 @@ function beginActivityGroup() {
     // 由 pushActivityEvent 边收边标记。以前 finalize 要求调用方再传一遍 events，
     // 而四个调用点一个都没传，定稿时必抛 TypeError（被 readSse 的 catch 吞掉了）。
     hasError: false,
+    // call_id -> 该次工具调用当前占据的那一行。终态事件到达时替换它，
+    // 而不是再追加一行。
+    rows: new Map(),
   };
 }
 
 function pushActivityEvent(handle, event) {
   if (!handle) return;
-  handle.list.append(buildActivityRow(event));
-  handle.count += 1;
+  const row = buildActivityRow(event);
+  const callId = event?.call_id || "";
+  const existing = callId ? handle.rows.get(callId) : null;
+  if (existing) {
+    // 同一次调用的终态：就地替换 running 行，保持原有顺序，步骤数不变。
+    // 以前只 append，两个工具会渲染成四行、其中两行永久停在「执行中」，
+    // 标题还写「执行了 4 个步骤」。
+    existing.replaceWith(row);
+    handle.rows.set(callId, row);
+  } else {
+    handle.list.append(row);
+    handle.count += 1;
+    if (callId) handle.rows.set(callId, row);
+  }
   if (event?.status === "error") handle.hasError = true;
   refreshIcons();
   scrollChatToEnd();
@@ -910,14 +950,16 @@ async function downloadFile() {
 }
 
 function renderTrace() {
-  setText(elements.eventCount, state.events.length);
-  setText(elements.traceCount, state.events.length);
+  // 同样按 call_id 折叠：一次工具调用算一条记录，不是 running + 终态两条。
+  const events = collapseByCall(state.events);
+  setText(elements.eventCount, events.length);
+  setText(elements.traceCount, events.length);
   elements.traceList.replaceChildren();
-  if (!state.events.length) {
+  if (!events.length) {
     elements.traceList.innerHTML = '<p class="muted-line">尚无执行记录</p>';
     return;
   }
-  for (const event of [...state.events].reverse()) {
+  for (const event of [...events].reverse()) {
     const entry = document.createElement("article");
     entry.className = `trace-entry ${event.status}`;
     entry.innerHTML = '<div class="trace-head"><strong></strong><time class="trace-time"></time></div><div class="trace-detail"></div>';
