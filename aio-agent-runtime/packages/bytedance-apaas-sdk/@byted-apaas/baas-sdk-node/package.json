@@ -1,0 +1,37 @@
+{
+  "name": "@byted-apaas/baas-sdk-node",
+  "version": "1.0.20",
+  "description": "aPaaS BaaS SDK",
+  "author": "zhouwexin <zhouwexin@bytedance.com>",
+  "homepage": "",
+  "license": "MIT",
+  "main": "lib/infra.js",
+  "scripts": {
+    "compile": "tsc -d",
+    "compile.local": "tsc -d --sourceMap",
+    "clean": "tsc --build --clean && rm -rf **/*.js.map"
+  },
+  "dependencies": {
+    "@byted-apaas/server-common-node": "^2.0.24",
+    "axios": "^0.25.0",
+    "bson": "^1.1.6",
+    "form-data": "^3.0.0",
+    "mime": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^9.0.0",
+    "mocha": "^9.1.3",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.5.4"
+  },
+  "mocha": {
+    "color": true,
+    "recursive": [
+      "test/**/*.test.ts"
+    ],
+    "require": [
+      "ts-node/register"
+    ],
+    "timeout": 20000
+  }
+}

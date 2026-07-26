@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+node_modules/
+npm-debug.log*
+.pytest_cache/
+.mypy_cache/
+.coverage
+# 仅忽略项目根目录的临时构建输出；packages 内归档的 dist 是可运行依赖。
+/dist/
+/build/
+/var/
+.env
+.env.*
+!.env.example
+# 本机模型覆盖（可含密钥，勿提交）
+config/models.local.json
+*.log
+apps/sandbox-lite/tmp/*

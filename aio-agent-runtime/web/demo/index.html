@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIO Sandbox Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  height: 100vh; overflow: hidden; background: #1e1e1e; color: #e0e0e0;
+}
+.toolbar {
+  height: 48px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+  display: flex; align-items: center; padding: 0 16px; gap: 12px; user-select: none;
+}
+.toolbar-title { font-weight: 500; font-size: 14px; color: #ccc; margin-right: auto; }
+.panel-toggles { display: flex; gap: 8px; }
+.panel-toggle {
+  padding: 6px 12px; background: #3c3c3c; border: 1px solid #555;
+  border-radius: 4px; color: #ccc; cursor: pointer; font-size: 13px;
+  transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+}
+.panel-toggle:hover { background: #4a4a4a; border-color: #6a6a6a; }
+.panel-toggle.active { background: #0e639c; border-color: #1177bb; color: #fff; }
+.panel-toggle .indicator {
+  width: 8px; height: 8px; border-radius: 50%; background: #6c6c6c;
+}
+.panel-toggle.active .indicator { background: #4dff4d; box-shadow: 0 0 4px #4dff4d; }
+.layout-buttons { display: flex; gap: 4px; margin-left: 12px; padding-left: 12px; border-left: 1px solid #555; }
+.layout-btn {
+  width: 32px; height: 32px; background: #3c3c3c; border: 1px solid #555;
+  border-radius: 4px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; transition: all 0.2s;
+}
+.layout-btn:hover { background: #4a4a4a; border-color: #6a6a6a; }
+.layout-btn.active { background: #0e639c; border-color: #1177bb; }
+.layout-btn svg { width: 18px; height: 18px; fill: #ccc; }
+.layout-btn.active svg { fill: #fff; }
+.workspace { height: calc(100vh - 48px); position: relative; display: flex; }
+.panel-container { flex: 1; position: relative; display: flex; min-width: 0; min-height: 0; }
+.panel-container.horizontal { flex-direction: row; }
+.panel-container.vertical { flex-direction: column; }
+.panel {
+  flex: 1; position: relative; display: none; background: #1e1e1e;
+  min-width: 200px; min-height: 200px; overflow: hidden;
+}
+.panel.active { display: flex; flex-direction: column; }
+.panel-header {
+  height: 32px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+  display: flex; align-items: center; padding: 0 12px; user-select: none;
+}
+.panel-title { font-size: 13px; color: #ccc; flex: 1; }
+.panel-actions { display: flex; gap: 4px; }
+.panel-action {
+  width: 20px; height: 20px; background: transparent; border: none;
+  color: #999; cursor: pointer; border-radius: 3px; font-size: 16px; line-height: 20px; text-align: center;
+}
+.panel-action:hover { background: #3c3c3c; color: #ccc; }
+.panel-content { flex: 1; overflow: auto; padding: 0; }
+.resizer {
+  position: absolute; background: transparent; z-index: 1000;
+}
+.resizer:hover { background: #007acc; }
+.resizer.horizontal { width: 4px; height: 100%; cursor: col-resize; right: -2px; top: 0; }
+.resizer.vertical { width: 100%; height: 4px; cursor: row-resize; bottom: -2px; left: 0; }
+.drag-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999; display: none;
+}
+.drag-overlay.active { display: block; }
+
+/* Terminal Styles */
+.terminal-wrapper { height: 100%; background: #1e1e1e; padding: 8px; overflow: hidden; display: flex; flex-direction: column; }
+.terminal-output {
+  flex: 1; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px; line-height: 1.5; color: #d4d4d4; padding: 4px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.terminal-output .prompt { color: #6a9955; }
+.terminal-output .cmd { color: #d4d4d4; }
+.terminal-output .output { color: #9cdcfe; }
+.terminal-output .error { color: #f44747; }
+.terminal-output .info { color: #ce9178; }
+.terminal-input-line { display: flex; align-items: center; gap: 4px; padding: 4px 0; }
+.terminal-input-line .prompt { color: #6a9955; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; font-size: 14px; }
+.terminal-input-line input {
+  flex: 1; background: transparent; border: none; color: #d4d4d4;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; font-size: 14px;
+  outline: none; caret-color: #d4d4d4;
+}
+
+/* Code Editor */
+.code-editor {
+  height: 100%; background: #1e1e1e; display: flex; flex-direction: column;
+}
+.code-tabs {
+  display: flex; background: #2d2d30; border-bottom: 1px solid #3e3e42; overflow-x: auto;
+}
+.code-tab {
+  padding: 6px 16px; font-size: 13px; color: #999; cursor: pointer;
+  border-right: 1px solid #3e3e42; user-select: none; white-space: nowrap;
+}
+.code-tab.active { color: #fff; background: #1e1e1e; border-bottom: 1px solid #1e1e1e; }
+.code-tab .close { margin-left: 8px; opacity: 0.5; }
+.code-tab .close:hover { opacity: 1; }
+.code-body {
+  flex: 1; padding: 12px 16px; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px; line-height: 1.6; color: #d4d4d4; overflow: auto; white-space: pre;
+  tab-size: 4; outline: none;
+}
+.code-body .kw { color: #569cd6; }
+.code-body .str { color: #ce9178; }
+.code-body .cm { color: #6a9955; }
+.code-body .fn { color: #dcdcaa; }
+.code-body .num { color: #b5cea8; }
+.code-body .op { color: #d4d4d4; }
+
+/* Browser Mock */
+.browser-view { height: 100%; background: #fff; display: flex; flex-direction: column; }
+.browser-address-bar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: #dee1e6; border-bottom: 1px solid #ccc;
+}
+.browser-nav-btn { width: 28px; height: 28px; border: none; border-radius: 50%; cursor: pointer; background: transparent; font-size: 16px; color: #555; display: flex; align-items: center; justify-content: center; }
+.browser-nav-btn:hover { background: rgba(0,0,0,0.1); }
+.browser-url-input {
+  flex: 1; padding: 4px 12px; border: 1px solid #ccc; border-radius: 16px;
+  font-size: 13px; outline: none; background: #fff; color: #333;
+}
+.browser-url-input:focus { border-color: #0e639c; }
+.browser-content {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  background: #f5f5f5; color: #999; font-size: 14px;
+  position: relative; overflow: hidden;
+}
+.browser-content .page-preview { text-align: center; }
+.browser-content .page-preview h2 { color: #333; font-weight: 400; margin-bottom: 8px; }
+.browser-content .page-preview p { color: #666; }
+
+/* Jupyter Mock */
+.jupyter-view { height: 100%; background: #f5f5f5; display: flex; flex-direction: column; }
+.jupyter-toolbar {
+  display: flex; align-items: center; gap: 4px; padding: 4px 8px;
+  background: #e8e8e8; border-bottom: 1px solid #ccc;
+}
+.jupyter-btn {
+  padding: 4px 8px; background: transparent; border: 1px solid transparent;
+  border-radius: 3px; cursor: pointer; font-size: 12px; color: #555;
+}
+.jupyter-btn:hover { background: #ddd; border-color: #ccc; }
+.jupyter-cell { padding: 8px 16px; border-left: 4px solid transparent; }
+.jupyter-cell.active { border-left-color: #0e639c; background: #fff; }
+.jupyter-cell .cell-prompt { font-size: 12px; color: #999; margin-bottom: 4px; font-family: monospace; }
+.jupyter-cell .cell-input {
+  width: 100%; min-height: 28px; border: none; background: transparent;
+  font-family: monospace; font-size: 13px; color: #333; outline: none; resize: none;
+}
+.jupyter-cell .cell-output {
+  margin-top: 4px; padding: 8px; background: #fafafa; border-radius: 4px;
+  font-family: monospace; font-size: 13px; color: #333; border: 1px solid #eee;
+}
+
+/* Status bar simulation */
+.status-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; height: 24px;
+  background: #007acc; color: #fff; font-size: 12px; padding: 0 12px;
+  display: flex; align-items: center; gap: 16px; z-index: 100;
+}
+.status-bar .left { display: flex; gap: 16px; }
+.status-bar .right { margin-left: auto; display: flex; gap: 16px; }
+
+.no-select { user-select: none; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <div class="toolbar-title">AIO Sandbox</div>
+  <div class="panel-toggles">
+    <button class="panel-toggle active" data-panel="code"><span class="indicator"></span> Code</button>
+    <button class="panel-toggle" data-panel="terminal"><span class="indicator"></span> Terminal</button>
+    <button class="panel-toggle active" data-panel="browser"><span class="indicator"></span> Browser</button>
+    <button class="panel-toggle" data-panel="jupyter"><span class="indicator"></span> Jupyter</button>
+  </div>
+  <div class="layout-buttons">
+    <button class="layout-btn active" title="Grid Layout" data-layout="grid">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/></svg>
+    </button>
+    <button class="layout-btn" title="Vertical Split" data-layout="vertical">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="18"/><rect x="13" y="3" width="8" height="18"/></svg>
+    </button>
+    <button class="layout-btn" title="Horizontal Split" data-layout="horizontal">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="8"/><rect x="3" y="13" width="18" height="8"/></svg>
+    </button>
+    <button class="layout-btn" title="Single Panel" data-layout="single">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="workspace" id="workspace">
+  <div class="panel-container horizontal" id="mainContainer"></div>
+</div>
+
+<div class="drag-overlay" id="dragOverlay"></div>
+
+<div class="status-bar">
+  <span class="left">
+    <span>main</span>
+    <span>Python 3.12</span>
+  </span>
+  <span class="right">
+    <span id="statusTime"></span>
+    <span>Ready</span>
+  </span>
+</div>
+
+<div id="panelTemplates" style="display:none">
+<!-- Terminal Template -->
+<div class="panel-content terminal-wrapper" data-template="terminal">
+  <div class="terminal-output" id="termOutput">
+    <span class="info">[System] AIO Sandbox Terminal v1.0.0</span>
+    <span class="info">[System] Session started at 2025-01-15 10:30:00 UTC</span>
+    <span class="info">[System] Type 'help' for available commands</span>
+  </div>
+  <div class="terminal-input-line">
+    <span class="prompt">guest@sandbox:~$</span>
+    <input type="text" id="termInput" autofocus placeholder="Type a command...">
+  </div>
+</div>
+
+<!-- Code Editor Template -->
+<div class="panel-content code-editor" data-template="code">
+  <div class="code-tabs">
+    <div class="code-tab active">main.py <span class="close">×</span></div>
+    <div class="code-tab">utils.py <span class="close">×</span></div>
+  </div>
+  <div class="code-body" id="codeBody" contenteditable spellcheck="false">import sys
+import json
+from typing import Optional
+
+
+<span class="kw">class</span> <span class="fn">SandboxClient</span>:
+    <span class="str">"""AIO Sandbox runtime client"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, base_url: str, api_key: Optional[str] = <span class="kw">None</span>):
+        self.base_url = base_url
+        self.api_key = api_key or <span class="str">""</span>
+        self.session_id = <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">execute_code</span>(self, code: str, language: str = <span class="str">"python"</span>) -> dict:
+        <span class="str">"""Execute code in the sandbox"""</span>
+        payload = {
+            <span class="str">"code"</span>: code,
+            <span class="str">"language"</span>: language,
+            <span class="str">"timeout"</span>: <span class="num">30</span>
+        }
+        <span class="kw">return</span> self.<span class="fn">_request</span>(<span class="str">"POST"</span>, <span class="str">"/v1/execute"</span>, payload)</div>
+</div>
+
+<!-- Browser Template -->
+<div class="panel-content browser-view" data-template="browser">
+  <div class="browser-address-bar">
+    <button class="browser-nav-btn">◀</button>
+    <button class="browser-nav-btn">▶</button>
+    <button class="browser-nav-btn">⟳</button>
+    <input class="browser-url-input" type="text" value="https://example.com" readonly>
+  </div>
+  <div class="browser-content" id="browserContent">
+    <div class="page-preview">
+      <h2>Welcome to Example Domain</h2>
+      <p>This domain is for use in illustrative examples in documents.</p>
+      <p style="margin-top:16px;font-size:28px;">🌐</p>
+    </div>
+  </div>
+</div>
+
+<!-- Jupyter Template -->
+<div class="panel-content jupyter-view" data-template="jupyter">
+  <div class="jupyter-toolbar">
+    <button class="jupyter-btn">▶ Run</button>
+    <button class="jupyter-btn">⏹ Stop</button>
+    <button class="jupyter-btn">➕ Cell</button>
+    <button class="jupyter-btn">✂ Cut</button>
+    <button class="jupyter-btn">📋 Copy</button>
+    <button class="jupyter-btn">📄 Paste</button>
+  </div>
+  <div style="flex:1;overflow-y:auto;">
+    <div class="jupyter-cell active">
+      <div class="cell-prompt">In [1]:</div>
+      <textarea class="cell-input" rows="2">import pandas as pd
+import numpy as np</textarea>
+    </div>
+    <div class="jupyter-cell">
+      <div class="cell-prompt">In [2]:</div>
+      <textarea class="cell-input" rows="3">df = pd.DataFrame({
+    'x': np.random.randn(100),
+    'y': np.random.randn(100)
+})
+df.head()</textarea>
+      <div class="cell-output">   x         y
+0  0.345 -0.123
+1 -0.987  1.234
+2  0.567 -0.890
+3 -1.234  0.456
+4  0.789 -0.345</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+class WorkspaceManager {
+  constructor() {
+    this.panels = {
+      code:      { title: 'Code',     active: true,  enabled: true, element: null, template: 'code' },
+      terminal:  { title: 'Terminal', active: false, enabled: true, element: null, template: 'terminal' },
+      browser:   { title: 'Browser',  active: true,  enabled: true, element: null, template: 'browser' },
+      jupyter:   { title: 'Jupyter',  active: false, enabled: true, element: null, template: 'jupyter' }
+    };
+    this.currentLayout = 'grid';
+    this.resizing = false;
+    this.resizeHandler = null;
+    this.init();
+  }
+
+  init() {
+    this.setupEventListeners();
+    this.renderPanels();
+    this.setupTerminal();
+    setInterval(() => {
+      const el = document.getElementById('statusTime');
+      if (el) el.textContent = new Date().toLocaleTimeString();
+    }, 1000);
+  }
+
+  setupEventListeners() {
+    document.querySelectorAll('.panel-toggle').forEach(btn => {
+      btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel));
+    });
+    document.querySelectorAll('.layout-btn').forEach(btn => {
+      btn.addEventListener('click', () => this.setLayout(btn.dataset.layout));
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (this.resizeHandler) this.resizeHandler(e);
+    });
+    document.addEventListener('mouseup', () => {
+      if (this.resizing) {
+        this.resizing = false;
+        this.resizeHandler = null;
+        document.getElementById('dragOverlay').classList.remove('active');
+      }
+    });
+  }
+
+  togglePanel(id) {
+    const panel = this.panels[id];
+    if (!panel) return;
+    panel.active = !panel.active;
+    const btn = document.querySelector(`.panel-toggle[data-panel="${id}"]`);
+    if (btn) btn.classList.toggle('active', panel.active);
+    this.renderPanels();
+  }
+
+  renderPanels() {
+    const container = document.getElementById('mainContainer');
+    const existing = {};
+    container.querySelectorAll('.panel').forEach(el => {
+      const id = el.dataset.panelId;
+      if (id && this.panels[id]) existing[id] = el;
+    });
+    container.innerHTML = '';
+    const active = Object.entries(this.panels).filter(([_, p]) => p.active).map(([id, p]) => ({ id, ...p, existingElement: existing[id] }));
+    Object.entries(this.panels).forEach(([id, p]) => {
+      const btn = document.querySelector(`.panel-toggle[data-panel="${id}"]`);
+      if (btn) btn.classList.toggle('active', p.active);
+    });
+    document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.layout === this.currentLayout));
+    if (active.length === 0) {
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;flex:1;color:#666;">Select panels to display</div>';
+      return;
+    }
+    this.applyLayout(container, active);
+  }
+
+  applyLayout(container, panels) {
+    switch (this.currentLayout) {
+      case 'grid': this.applyGrid(container, panels); break;
+      case 'vertical': this.applyVertical(container, panels); break;
+      case 'horizontal': this.applyHorizontal(container, panels); break;
+      case 'single': this.applySingle(container, panels); break;
+    }
+  }
+
+  applyGrid(container, panels) {
+    container.className = 'panel-container vertical';
+    if (panels.length === 1) {
+      this.createPanel(container, panels[0]);
+    } else if (panels.length === 2) {
+      container.className = 'panel-container horizontal';
+      panels.forEach(p => this.createPanel(container, p));
+    } else if (panels.length === 3) {
+      container.className = 'panel-container horizontal';
+      this.createPanel(container, panels[0]);
+      const rc = this.createContainer(container, 'vertical');
+      this.createPanel(rc, panels[1]);
+      this.createPanel(rc, panels[2]);
+    } else if (panels.length >= 4) {
+      const tr = this.createContainer(container, 'horizontal');
+      const br = this.createContainer(container, 'horizontal');
+      panels.forEach((p, i) => this.createPanel(i < 2 ? tr : br, p));
+    }
+  }
+
+  applyVertical(container, panels) {
+    container.className = 'panel-container horizontal';
+    panels.forEach(p => this.createPanel(container, p));
+  }
+
+  applyHorizontal(container, panels) {
+    container.className = 'panel-container vertical';
+    panels.forEach(p => this.createPanel(container, p));
+  }
+
+  applySingle(container, panels) {
+    container.className = 'panel-container horizontal';
+    if (panels.length > 0) this.createPanel(container, panels[0]);
+  }
+
+  createContainer(parent, dir) {
+    const el = document.createElement('div');
+    el.className = `panel-container ${dir}`;
+    parent.appendChild(el);
+    return el;
+  }
+
+  createPanel(parent, panelData) {
+    if (panelData.existingElement) {
+      parent.appendChild(panelData.existingElement);
+      this.panels[panelData.id].element = panelData.existingElement;
+      this.addResizer(parent, panelData.existingElement);
+      return;
+    }
+    const panel = document.createElement('div');
+    panel.className = 'panel active';
+    panel.dataset.panelId = panelData.id;
+    const header = document.createElement('div');
+    header.className = 'panel-header';
+    header.innerHTML = `
+      <div class="panel-title">${panelData.title}</div>
+      <div class="panel-actions">
+        <button class="panel-action" onclick="workspace.maximizePanel('${panelData.id}')" title="Maximize">⬜</button>
+        <button class="panel-action" onclick="workspace.closePanel('${panelData.id}')" title="Close">×</button>
+      </div>`;
+    const tmpl = document.querySelector(`[data-template="${panelData.template}"]`);
+    const content = tmpl ? tmpl.cloneNode(true) : document.createElement('div');
+    content.className = content.className || 'panel-content';
+    content.removeAttribute('data-template');
+    panel.appendChild(header);
+    panel.appendChild(content);
+    parent.appendChild(panel);
+    this.panels[panelData.id].element = panel;
+    this.addResizer(parent, panel);
+  }
+
+  addResizer(parent, panel) {
+    const existing = panel.querySelector('.resizer');
+    if (existing) existing.remove();
+    const siblings = Array.from(parent.children).filter(c => c.classList.contains('panel'));
+    const idx = siblings.indexOf(panel);
+    if (idx > 0) {
+      const prev = siblings[idx - 1];
+      const resizer = document.createElement('div');
+      const isH = parent.classList.contains('horizontal');
+      resizer.className = `resizer ${isH ? 'horizontal' : 'vertical'}`;
+      resizer.addEventListener('mousedown', (e) => {
+        this.resizing = true;
+        const startPos = isH ? e.clientX : e.clientY;
+        const startSize = isH ? prev.offsetWidth : prev.offsetHeight;
+        let next = prev.nextElementSibling;
+        while (next && !next.classList.contains('panel')) next = next.nextElementSibling;
+        if (!next) return;
+        const nextStartSize = isH ? next.offsetWidth : next.offsetHeight;
+        document.getElementById('dragOverlay').classList.add('active');
+        this.resizeHandler = (ev) => {
+          if (!this.resizing) return;
+          const delta = (isH ? ev.clientX : ev.clientY) - startPos;
+          const newSize = startSize + delta;
+          const nextNewSize = nextStartSize - delta;
+          if (newSize > 120 && nextNewSize > 120) {
+            prev.style.flex = `0 0 ${newSize}px`;
+            next.style.flex = `0 0 ${nextNewSize}px`;
+          }
+        };
+        e.preventDefault();
+      });
+      prev.appendChild(resizer);
+    }
+  }
+
+  setLayout(layout) {
+    this.currentLayout = layout;
+    this.renderPanels();
+  }
+
+  maximizePanel(id) {
+    Object.keys(this.panels).forEach(key => {
+      if (key !== id) {
+        this.panels[key]._saved = this.panels[key].active;
+        this.panels[key].active = false;
+      } else {
+        this.panels[key].active = true;
+      }
+    });
+    this.renderPanels();
+  }
+
+  closePanel(id) {
+    this.panels[id].active = false;
+    this.renderPanels();
+  }
+
+  setupTerminal() {
+    const input = document.getElementById('termInput');
+    if (!input) return;
+    const output = document.getElementById('termOutput');
+    const commands = {
+      help: 'Available commands:\n  help     - Show this message\n  python   - Interactive Python\n  ls       - List files\n  pwd      - Print working directory\n  clear    - Clear terminal\n  date     - Show date & time\n  whoami   - Show current user',
+      python: 'Python 3.12.0 (default, Oct 7 2025, 10:00:00)\n[GCC 12.2.0] on linux\nType "help", "copyright", "credits" or "license" for more information.\n>>> ',
+      ls: 'Desktop  Documents  Downloads  projects  sandbox.py  README.md',
+      pwd: '/home/guest',
+      clear: '__CLEAR__',
+      date: new Date().toString(),
+      whoami: 'guest',
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const cmd = input.value.trim();
+        input.value = '';
+        output.innerHTML += `\n<span class="prompt">guest@sandbox:~$</span> <span class="cmd">${cmd}</span>\n`;
+        if (!cmd) { output.scrollTop = output.scrollHeight; return; }
+        const parts = cmd.split(/\s+/);
+        const base = parts[0].toLowerCase();
+        if (base in commands) {
+          const result = commands[base];
+          if (result === '__CLEAR__') {
+            output.innerHTML = '';
+          } else {
+            output.innerHTML += `<span class="output">${result}</span>\n`;
+          }
+        } else if (base === 'python' && parts.length > 1) {
+          output.innerHTML += `<span class="output">>>> ${parts.slice(1).join(' ')}
+${eval.mock ? 'Error: eval is not defined' : 'Traceback (most recent call last):\n  File "<stdin>", line 1\nNameError: name \\'...\\' is not defined'}</span>\n`;
+        } else {
+          output.innerHTML += `<span class="error">Command not found: ${base}. Try 'help'</span>\n`;
+        }
+        output.scrollTop = output.scrollHeight;
+      }
+    });
+  }
+}
+
+const workspace = new WorkspaceManager();
+</script>
+</body>
+</html>
