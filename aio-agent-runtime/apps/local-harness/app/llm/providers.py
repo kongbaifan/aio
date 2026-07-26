@@ -146,6 +146,27 @@ def _models_as_map(raw: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _extract_providers(data: dict[str, Any]) -> dict[str, Any]:
+    """取出 provider 表，允许省略 providers 外层（扁平写法）。
+
+    扁平时要排除 default / $schema 这类顶层元数据键，否则它们会被当成
+    provider 名混进来。
+    """
+    nested = data.get("providers")
+    if isinstance(nested, dict):
+        return nested
+    return {
+        key: value
+        for key, value in data.items()
+        if isinstance(value, dict) and key not in {"default", "$schema"}
+    }
+
+
+def _local_override_path(primary: Path) -> Path:
+    """主配置对应的本机覆盖文件：a/b/models.json -> a/b/models.local.json。"""
+    return primary.with_name(f"{primary.stem}.local{primary.suffix}")
+
+
 def _deep_merge_providers(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for name, cfg in overlay.items():
@@ -159,13 +180,31 @@ def _deep_merge_providers(base: dict[str, Any], overlay: dict[str, Any]) -> dict
         current = dict(merged[name])
         for key, value in cfg.items():
             if key == "models":
+                # 逐个 model 做字段合并，而不是整体替换：local 里只想改
+                # maxTokens 时，不该把 contextWindow 和 model 级 compat 一起丢掉。
                 model_map = _models_as_map(current.get("models"))
-                model_map.update(_models_as_map(value))
+                for model_id, overlay_model in _models_as_map(value).items():
+                    base_model = model_map.get(model_id)
+                    if isinstance(base_model, dict):
+                        merged_model = dict(base_model)
+                        for mk, mv in overlay_model.items():
+                            # model 级 compat 同样是字段合并。
+                            if mk == "compat" and isinstance(mv, dict):
+                                merged_compat = dict(base_model.get("compat") or {})
+                                merged_compat.update(mv)
+                                merged_model["compat"] = merged_compat
+                            else:
+                                merged_model[mk] = mv
+                        model_map[model_id] = merged_model
+                    else:
+                        model_map[model_id] = overlay_model
                 current["models"] = model_map
-            elif key == "compat" and isinstance(value, dict):
-                compat = dict(current.get("compat") or {})
-                compat.update(value)
-                current["compat"] = compat
+            elif key in {"compat", "headers"} and isinstance(value, dict):
+                # headers 之前是整体替换：overlay 里加一个 HTTP-Referer，
+                # base 里的 X-Title 等就全没了。和 compat 一样按字段合并。
+                base_map = dict(current.get(key) or {})
+                base_map.update(value)
+                current[key] = base_map
             else:
                 current[key] = value
         if not isinstance(current.get("models"), dict):
@@ -195,7 +234,11 @@ class ModelRegistry:
             else:
                 paths.append(default_models_json_path())
 
-        local_path = default_models_local_path()
+        # 本机覆盖文件跟随主配置：<主配置>.local.json，而不是永远指向
+        # <project>/config/models.local.json。否则用 HARNESS_MODELS_JSON 指向
+        # 另一套配置时，项目里的本机覆盖仍会污染进来；测试也会因为开发者
+        # 本地建了 config/models.local.json 而莫名其妙地红。
+        local_path = _local_override_path(paths[0])
         providers: dict[str, dict[str, Any]] = {}
         default_provider = ""
         default_model = ""
@@ -207,7 +250,7 @@ class ModelRegistry:
                 continue
             data = _load_json_file(path)
             source = str(path)
-            raw_providers = data.get("providers") if isinstance(data.get("providers"), dict) else data
+            raw_providers = _extract_providers(data)
             if isinstance(raw_providers, dict):
                 providers = _deep_merge_providers(providers, raw_providers)
             default = data.get("default") if isinstance(data.get("default"), dict) else {}
@@ -220,7 +263,10 @@ class ModelRegistry:
 
         if local_path.is_file():
             data = _load_json_file(local_path)
-            raw_providers = data.get("providers") if isinstance(data.get("providers"), dict) else {}
+            # 与主配置同样的宽容度：允许省略 providers 外层。此前 local 走的是
+            # `else {}`，照着主文件写成扁平格式会被静默完全忽略，覆盖不生效
+            # 也不报错。同一套格式在两个文件里语义必须一致。
+            raw_providers = _extract_providers(data)
             if isinstance(raw_providers, dict) and raw_providers:
                 providers = _deep_merge_providers(providers, raw_providers)
             default = data.get("default") if isinstance(data.get("default"), dict) else {}

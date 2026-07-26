@@ -161,8 +161,19 @@ def test_missing_models_json_raises(tmp_path: Path, monkeypatch):
 
 
 def test_normalize_chat_url():
+    # 已含 /v1：直接补 chat/completions
     assert _normalize_chat_url("https://api.openai.com/v1") == "https://api.openai.com/v1/chat/completions"
-    assert _normalize_chat_url("https://api.deepseek.com") == "https://api.deepseek.com/chat/completions"
+    # 只给 host：补 /v1。此前这里断言的是不补 /v1，把一个会让 OpenAI 返回 404
+    # 的行为固化成了预期；DeepSeek 两种写法都受理，所以改动对它无影响。
+    assert _normalize_chat_url("https://api.deepseek.com") == "https://api.deepseek.com/v1/chat/completions"
+    assert _normalize_chat_url("https://api.openai.com") == "https://api.openai.com/v1/chat/completions"
+    # 带路径的网关：保持原样，不擅自插 /v1
+    assert _normalize_chat_url("https://gw.example.com/api") == "https://gw.example.com/api/chat/completions"
+    # 已经是完整端点：原样返回
+    assert (
+        _normalize_chat_url("https://gw.example.com/v1/chat/completions")
+        == "https://gw.example.com/v1/chat/completions"
+    )
 
 
 def test_openai_client_from_ref(tmp_path: Path, monkeypatch):

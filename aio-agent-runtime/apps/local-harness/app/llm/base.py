@@ -72,6 +72,9 @@ class AssistantTurn:
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
+    # 上游给的结束原因（stop / length / tool_calls / …）。"length" 表示答案被
+    # max_tokens 截断——不记录的话，截断结果和正常完成在上层完全无法区分。
+    finish_reason: str = ""
 
 
 @dataclass

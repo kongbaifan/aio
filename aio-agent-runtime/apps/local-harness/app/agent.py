@@ -202,6 +202,10 @@ class AgentRunner:
             messages.append(assistant_message)
             if not turn.tool_calls:
                 answer = turn.content or "任务已完成，但模型没有返回文字说明。"
+                if turn.finish_reason == "length":
+                    # 上游因 max_tokens 截断。不说的话，半截答案和正常完成
+                    # 在界面上完全一样，用户会把它当成完整结论。
+                    answer += "\n\n> ⚠ 回答因达到长度上限被截断，内容可能不完整。"
                 await self.sessions.append(session, {"role": "assistant", "content": answer})
                 await self.audit.write(
                     "agent.finish",

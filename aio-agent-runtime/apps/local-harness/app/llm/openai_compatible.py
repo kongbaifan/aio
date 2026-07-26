@@ -17,6 +17,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -59,14 +60,19 @@ def _sanitize_upstream(text: str, limit: int = _ERROR_BODY_LIMIT) -> str:
 
 
 def _normalize_chat_url(base_url: str) -> str:
-    """拼出 .../chat/completions；兼容 base 已含 /v1 或仅域名。"""
+    """拼出 .../chat/completions；兼容 base 已含完整路径、含 /v1 或仅域名。
+
+    只给 host 时补 /v1：这是 OpenAI 兼容接口的通行布局，https://api.openai.com
+    不加就是 404。原实现的两个分支返回的是同一个表达式，注释写着「优先加 /v1」
+    但代码没加。DeepSeek 两种都受理，所以补 /v1 对它无影响。
+    带路径的 baseUrl（如 https://gw.example.com/api）保持原样，不擅自插 /v1。
+    """
     root = base_url.rstrip("/")
     if root.endswith("/chat/completions"):
         return root
-    # deepseek 官方 base 可以是 https://api.deepseek.com（无 /v1）
-    if root.endswith("/v1"):
-        return f"{root}/chat/completions"
-    # 若用户只给了 host，优先加 /v1（与 OpenAI 习惯一致）；DeepSeek 两者皆可
+    path = urlsplit(root).path
+    if not path or path == "/":
+        return f"{root}/v1/chat/completions"
     return f"{root}/chat/completions"
 
 
@@ -255,9 +261,14 @@ class OpenAICompatibleClient:
         content = message.get("content")
         if content is None:
             content = ""
-        # DeepSeek reasoner 等可能把思考放在 reasoning_content
-        if not content and message.get("reasoning_content"):
-            content = ""
+        # DeepSeek reasoner 等把思考过程放在 reasoning_content。正常情况下两者
+        # 都有，取 content 即可；但只返回 reasoning_content 时，原实现是
+        # `content = ""`（空操作，写了等于没写），用户拿到一个空回答。
+        # 宁可把思考过程给出去，也好过界面上什么都没有。
+        if not content and not calls:
+            reasoning = message.get("reasoning_content")
+            if reasoning:
+                content = str(reasoning)
         return AssistantTurn(content=str(content), tool_calls=calls)
 
     async def respond(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> AssistantTurn:
@@ -270,11 +281,18 @@ class OpenAICompatibleClient:
             ) from exc
         turn = self._parse_assistant_message(message)
         usage = Usage.from_payload(data.get("usage"))
+        choice = (data.get("choices") or [{}])[0]
         return AssistantTurn(
             content=turn.content,
             tool_calls=turn.tool_calls,
             usage=usage if usage.calls else Usage(calls=1),
+            finish_reason=str(choice.get("finish_reason") or ""),
         )
+
+    async def _sleep_before_retry(self, attempt: int, reason: str) -> None:
+        wait = min(2**attempt, 8)
+        logger.warning("LLM 流式 %s，%ss 后重试 (%s/%s)", reason, wait, attempt + 1, self.max_retries)
+        await asyncio.sleep(wait)
 
     async def respond_stream(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -284,56 +302,105 @@ class OpenAICompatibleClient:
         逐个 yield TextDelta（本次新增文本），流结束后 yield 一个聚合好的
         AssistantTurn（含完整 content 与解析后的 tool_calls）。调用方据此边收
         文本边推送，收完再判断这一轮是要调工具还是给最终答案。
+
+        重试只发生在**建立连接阶段**（429/5xx、连接失败）：一旦开始 yield
+        TextDelta，前端就已经把文本显示出来了，重来会导致内容重复，所以
+        那之后的错误一律直接抛。此前流式路径完全没有重试，而工作台默认走
+        流式，等于 LLM_MAX_RETRIES 对主路径无效。
         """
         url = _normalize_chat_url(self.model_ref.base_url)
         payload = self._build_payload(messages, tools, stream=True)
         content = ""
+        reasoning = ""
+        finish_reason = ""
         usage = Usage()
         # 按 index 累积 tool_call 分片：{index: {"id","name","arguments"}}
         tool_fragments: dict[int, dict[str, str]] = {}
-        try:
-            async with self._client.stream("POST", url, headers=self._headers(), json=payload) as response:
-                if response.status_code >= 400:
-                    body = _sanitize_upstream(
-                        (await response.aread()).decode("utf-8", errors="replace")
-                    )
-                    raise LlmError(
-                        f"LLM stream failed: HTTP {response.status_code} — {body}",
-                        status_code=response.status_code,
-                        body=body,
-                    )
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
+        # 上游省略 index 时的兜底：按 call id 记住它属于第几个分片。
+        # 不做这件事的话所有分片都落进 index 0，不同工具的 arguments 首尾相连
+        # 拼成坏 JSON，解析失败后静默降级成 {}，第一个工具调用彻底消失。
+        id_to_index: dict[str, int] = {}
+        # 是否已经把内容推给上层。一旦为真就不能重试——前端已经显示了。
+        emitted = False
+        for attempt in range(self.max_retries + 1):
+            try:
+                async with self._client.stream(
+                    "POST", url, headers=self._headers(), json=payload
+                ) as response:
+                    if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
+                        await response.aread()  # 释放连接再重试
+                        await self._sleep_before_retry(attempt, f"HTTP {response.status_code}")
                         continue
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    # include_usage 的最后一个 chunk 里 choices 为空、只带 usage
-                    if chunk.get("usage"):
-                        usage = Usage.from_payload(chunk["usage"])
-                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
-                    piece = delta.get("content") or ""
-                    if piece:
-                        content += piece
-                        yield TextDelta(text=piece)
-                    for raw_call in delta.get("tool_calls") or []:
-                        index = raw_call.get("index", 0)
-                        fragment = tool_fragments.setdefault(
-                            index, {"id": "", "name": "", "arguments": ""}
+                    if response.status_code >= 400:
+                        body = _sanitize_upstream(
+                            (await response.aread()).decode("utf-8", errors="replace")
                         )
-                        if raw_call.get("id"):
-                            fragment["id"] = raw_call["id"]
-                        function = raw_call.get("function") or {}
-                        if function.get("name"):
-                            fragment["name"] = function["name"]
-                        if function.get("arguments"):
-                            fragment["arguments"] += function["arguments"]
-        except httpx.HTTPError as exc:
-            raise LlmError(f"LLM stream failed: {exc}") from exc
+                        raise LlmError(
+                            f"LLM stream failed: HTTP {response.status_code} — {body}",
+                            status_code=response.status_code,
+                            body=body,
+                        )
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        # include_usage 的最后一个 chunk 里 choices 为空、只带 usage
+                        if chunk.get("usage"):
+                            usage = Usage.from_payload(chunk["usage"])
+                        choice = (chunk.get("choices") or [{}])[0]
+                        if choice.get("finish_reason"):
+                            finish_reason = str(choice["finish_reason"])
+                        delta = choice.get("delta") or {}
+                        piece = delta.get("content") or ""
+                        if piece:
+                            content += piece
+                            emitted = True
+                            yield TextDelta(text=piece)
+                        # 思考过程单独累起来，不混进正文的打字机；只有在正文最终
+                        # 为空时才拿它兜底，免得 reasoner 模型给出一个空回答。
+                        reasoning_piece = delta.get("reasoning_content") or ""
+                        if reasoning_piece:
+                            reasoning += reasoning_piece
+                        for raw_call in delta.get("tool_calls") or []:
+                            emitted = True
+                            index = raw_call.get("index")
+                            call_id = raw_call.get("id") or ""
+                            if index is None:
+                                # 没有 index：优先按 id 归组，连 id 都没有就新开一片。
+                                if call_id and call_id in id_to_index:
+                                    index = id_to_index[call_id]
+                                else:
+                                    index = len(tool_fragments)
+                            try:
+                                index = int(index)
+                            except (TypeError, ValueError):
+                                index = len(tool_fragments)
+                            if call_id:
+                                id_to_index.setdefault(call_id, index)
+                            fragment = tool_fragments.setdefault(
+                                index, {"id": "", "name": "", "arguments": ""}
+                            )
+                            if raw_call.get("id"):
+                                fragment["id"] = raw_call["id"]
+                            function = raw_call.get("function") or {}
+                            if function.get("name"):
+                                fragment["name"] = function["name"]
+                            if function.get("arguments"):
+                                fragment["arguments"] += function["arguments"]
+                break  # 正常读完，跳出重试循环
+            except httpx.HTTPError as exc:
+                # 连接层错误：还没吐出任何内容且有剩余次数时才重试，
+                # 否则重来会让前端已显示的文本重复一遍。
+                if not emitted and attempt < self.max_retries:
+                    await self._sleep_before_retry(attempt, f"网络错误 {exc}")
+                    continue
+                raise LlmError(f"LLM stream failed: {exc}") from exc
 
         calls: list[ToolCall] = []
         for index in sorted(tool_fragments):
@@ -359,7 +426,12 @@ class OpenAICompatibleClient:
             # 上游没上报 usage（不支持 include_usage 等），至少记下发生过一次调用，
             # 免得统计看起来像「一次都没调」。
             usage = Usage(calls=1)
-        yield AssistantTurn(content=content, tool_calls=calls, usage=usage)
+        # 只有思考过程、没有正文时用它兜底（见 _parse_assistant_message 的同款处理）。
+        if not content and not calls and reasoning:
+            content = reasoning
+        yield AssistantTurn(
+            content=content, tool_calls=calls, usage=usage, finish_reason=finish_reason
+        )
 
     async def complete(self, system: str, user: str) -> str:
         text, _ = await self.complete_with_usage(system, user)

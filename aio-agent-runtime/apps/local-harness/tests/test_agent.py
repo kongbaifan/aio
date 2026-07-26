@@ -191,6 +191,42 @@ def test_model_failure_reports_usage_so_far(tmp_path):
     assert usage.get("calls") == 2
 
 
+def test_truncated_answer_is_flagged_to_user(tmp_path):
+    """finish_reason=length 说明答案被 max_tokens 砍断，必须让用户看见。
+
+    不提示的话，半截答案和正常完成在界面上完全一样，用户会当成完整结论。
+    """
+    runner = AgentRunner(
+        ToolRegistry(FakeSandbox(), FakeNode(), FakeBrowser()),
+        SkillRegistry((tmp_path,)),
+        SessionStore(),
+        AuditLogger(tmp_path / "audit.jsonl"),
+        max_rounds=4,
+    )
+    model = ScriptedModel([AssistantTurn(content="讲到一半", finish_reason="length")])
+
+    answer, _, _, _ = asyncio.run(runner.run("讲个长故事", model))
+
+    assert "讲到一半" in answer
+    assert "截断" in answer
+
+
+def test_normal_finish_has_no_truncation_notice(tmp_path):
+    """正常结束不该平白多出截断提示。"""
+    runner = AgentRunner(
+        ToolRegistry(FakeSandbox(), FakeNode(), FakeBrowser()),
+        SkillRegistry((tmp_path,)),
+        SessionStore(),
+        AuditLogger(tmp_path / "audit.jsonl"),
+        max_rounds=4,
+    )
+    model = ScriptedModel([AssistantTurn(content="说完了", finish_reason="stop")])
+
+    answer, _, _, _ = asyncio.run(runner.run("问一句", model))
+
+    assert answer == "说完了"
+
+
 def test_run_stream_emits_start_then_events_then_result(tmp_path):
     sandbox = FakeSandbox()
     tools = ToolRegistry(sandbox, FakeNode(), FakeBrowser())
