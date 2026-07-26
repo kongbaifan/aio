@@ -1,0 +1,16 @@
+# 这个仓库只维护 aio-agent-runtime 一个项目。根目录其余内容是整理它时用到的
+# 原始归档（来源与取舍见 aio-agent-runtime/docs/SOURCE_MAP.md）——5000 多个文件、
+# 约 700MB，含 ELF 二进制（mcp_vm_server）和一堆 __pycache__，都不进版本库。
+#
+# 这里用白名单而不是逐个列黑名单：先忽略根目录下的一切，再放行要维护的路径。
+# 好处是以后再往根目录解压一份归档，不会因为忘了补规则就被 git add -A 顺手提交。
+# 需要新增受管目录时，在下面补一条 `!/目录名/` 即可。
+
+/*
+
+!/.gitignore
+!/.github/
+!/aio-agent-runtime/
+
+# 说明：aio-agent-runtime/ 内部有自己的 .gitignore，仍然照常生效
+#（.env、var/、node_modules/、config/models.local.json 等在那里忽略）。
