@@ -1,0 +1,100 @@
+name: CI
+
+# 仓库根在 doubaoskills，aio-agent-runtime 只是其中一个子项目，
+# 所以 workflow 必须放在这里，再把工作目录切进子项目。
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'aio-agent-runtime/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'aio-agent-runtime/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: aio-agent-runtime
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            aio-agent-runtime/requirements-local.txt
+            aio-agent-runtime/apps/*/requirements*.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aio-agent-runtime/apps/local-harness/package-lock.json
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-local.txt
+          pip install -r apps/local-harness/requirements-dev.txt
+          pip install -r apps/sandbox-lite/requirements-dev.txt
+          # 可选 MCP 入口的依赖：不装的话 test_mcp_server.py 会被 importorskip
+          # 整个跳过，等于 MCP 旁路的策略测试没进门禁。
+          pip install -r apps/local-harness/requirements-mcp.txt
+          pip install ruff==0.16.0
+
+      - name: 检查密钥没有进版本库
+        run: |
+          if [ -f .env ]; then
+            echo "::error::.env 不应进版本库，请从 git 中移除（.gitignore 已忽略它）。"
+            exit 1
+          fi
+          if grep -nE '"apiKey"[[:space:]]*:[[:space:]]*"(sk-|key-)' config/models.json; then
+            echo "::error file=aio-agent-runtime/config/models.json::检测到明文 API Key。请把 apiKey 改成环境变量名，密钥放进 .env；本机专用配置写 config/models.local.json（已忽略）。"
+            exit 1
+          fi
+          # 上面那条只看 models.json，而真实密钥同样会被粘进测试、文档和示例配置
+          # （已经发生过一次：真实 key 进了 tests/test_providers.py 的字面量用例）。
+          # 长度阈值让 README 里 `sk-...` 这类说明性占位不会误报。
+          hits=$(grep -rnE '(sk-[A-Za-z0-9_-]{24,}|key-[A-Za-z0-9]{24,}|AIza[A-Za-z0-9_-]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{20,})' \
+                   --include='*.py' --include='*.json' --include='*.md' --include='*.js' --include='*.mjs' \
+                   --include='*.ts' --include='*.yaml' --include='*.yml' --include='*.sh' --include='*.ps1' \
+                   --exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=dist --exclude-dir=build \
+                   --exclude-dir=.venv --exclude-dir=site-packages --exclude-dir=.git \
+                   . | grep -vE 'sk-test|placeholder|EXAMPLE|<your|your-key' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::检测到疑似明文密钥。密钥只应写进 .env（已忽略）；测试请用 sk-test-… 这类假值。"
+            exit 1
+          fi
+          echo "未发现明文密钥"
+
+      # 规则集刻意很小，只拦运行时会炸的问题（F821 未定义名等），不做风格争论。
+      # services/ 是从归档整理来的，还有 59 处待治理，先不纳入门禁。
+      - name: ruff
+        run: ruff check apps tools scripts
+
+      - name: local-harness 测试
+        working-directory: aio-agent-runtime/apps/local-harness
+        run: pytest tests -q
+
+      - name: sandbox-lite 测试
+        working-directory: aio-agent-runtime/apps/sandbox-lite
+        run: pytest tests -q
+
+      # 工作台前端没有构建步骤，jsdom 直接加载 index.html + app.js 跑真实 SSE 链路。
+      # 加这一层的直接原因：两个方法名写错（stream.append、finalizeActivityGroup 少传参）
+      # 让流式输出和活动区整段失效，而异常被 readSse 的 catch 吞了，控制台毫无痕迹。
+      - name: 前端冒烟测试
+        working-directory: aio-agent-runtime/apps/local-harness
+        run: |
+          npm ci
+          npm test
