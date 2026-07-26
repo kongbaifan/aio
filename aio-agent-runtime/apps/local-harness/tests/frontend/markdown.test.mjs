@@ -71,6 +71,35 @@ describe("Markdown 渲染", () => {
   });
 });
 
+describe("打字机定稿", () => {
+  it("流式结束后代码块仍然被高亮", async () => {
+    // 流式途中为了性能跳过高亮（highlightElement 是这条路径上最贵的一步），
+    // 但定稿那一次必须补上，否则打字机出来的代码块永远是没高亮的。
+    const app = await launchWorkbench({
+      routes: {
+        "/api/chat/stream": () =>
+          sseResponse([
+            { kind: "start", session_id: "s1", matched: [] },
+            { kind: "delta", text: "```python\n" },
+            { kind: "delta", text: "print('hi')\n" },
+            { kind: "delta", text: "```" },
+            { kind: "done", session_id: "s1", files: [] },
+          ]),
+      },
+    });
+    opened.push(app);
+
+    await app.submit("给段代码");
+
+    const body = app.document.querySelector(".message.assistant .message-body");
+    assert.equal(body.classList.contains("streaming"), false, "定稿后要去掉 streaming");
+    const code = body.querySelector("pre code");
+    assert.ok(code, "应该有代码块");
+    assert.match(code.className, /\bhljs\b/, "定稿时必须补上高亮");
+    assert.ok(code.querySelector('[class^="hljs-"]'), "应有高亮 span");
+  });
+});
+
 describe("DOMPurify 净化", () => {
   it("模型输出里的 <script> 被剥掉", async () => {
     const body = await renderAssistant("正常文字<script>window.__pwned=1</script>结尾");

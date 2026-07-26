@@ -279,9 +279,15 @@ async def read_file(path: str = Query(...)):
     size = os.path.getsize(target)
     if size > MAX_FILE_BYTES:
         raise HTTPException(413, f"File exceeds {MAX_FILE_BYTES} byte limit")
-    try:
+    def _read() -> str:
         with open(target, "r", encoding="utf-8") as f:
-            content = f.read()
+            return f.read()
+
+    try:
+        # 丢到线程里：10MB 上限下同步 open 会明显阻塞事件循环，
+        # 配合 Windows 设备名（COM1 之类）甚至可能永久挂住整个进程。
+        # execute_code 已经是这么做的，这里对齐。
+        content = await asyncio.to_thread(_read)
         return {"path": path, "content": content, "size": size}
     except UnicodeDecodeError:
         return {"path": path, "content": "[Binary file]", "size": size}
@@ -292,9 +298,13 @@ async def write_file(req: WriteFileRequest):
     if content_size > MAX_FILE_BYTES:
         raise HTTPException(413, f"Content exceeds {MAX_FILE_BYTES} byte limit")
     target = safe_path(req.path)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        f.write(req.content)
+
+    def _write() -> None:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(req.content)
+
+    await asyncio.to_thread(_write)
     return {"path": req.path, "size": content_size}
 
 @app.post("/v1/files/mkdir")

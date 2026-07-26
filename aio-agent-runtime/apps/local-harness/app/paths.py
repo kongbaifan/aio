@@ -14,14 +14,20 @@ import os
 from pathlib import Path
 
 
-# 判定某一层是不是项目根的标志物。config/ 放 models.json，是运行时真正要读的东西。
-_ROOT_MARKERS = ("config",)
+# 判定某一层是不是项目根的标志物。
+#
+# 光看「有没有 config/ 目录」不够唯一：仓库里已经存在 infra/config、
+# services/hijack-proxy/config，谁再在 apps/local-harness/ 下建一个 config/，
+# project_root() 就会静默指错，连带 skill_roots、audit_log_path、
+# session_db_path、models.json 全部搬家，而且不会有任何报错。
+# 要求 config/models.json 这个文件存在，判据才真正唯一。
+_ROOT_MARKER_FILES = (Path("config") / "models.json",)
 
 
 def find_root(start: Path) -> Path | None:
     """从 start 向上找第一个含标志物的目录；找不到返回 None。"""
     for parent in start.parents:
-        if any((parent / marker).is_dir() for marker in _ROOT_MARKERS):
+        if any((parent / marker).is_file() for marker in _ROOT_MARKER_FILES):
             return parent
     return None
 

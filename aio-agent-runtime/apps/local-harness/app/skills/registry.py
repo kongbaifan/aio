@@ -20,6 +20,18 @@ DOMAIN_KEYWORDS: dict[str, set[str]] = {
 # 单个 skill 文件的读取上限；SKILL.md 最大的也只有 600 多行，超过这个量级多半不是文档。
 MAX_SKILL_FILE_BYTES = 262144
 
+# read_skill 的边界只保证「不出 skill 根目录」，根目录内什么都能读。
+# 这里不做扩展名白名单——skill 会引用自己的 scripts/*.py，白名单会误伤；
+# 改为挡住明显的凭据类文件名，防止有人把 .env 或私钥放进 skills/ 后被模型读走。
+_SENSITIVE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".npmrc", ".netrc", ".htpasswd"}
+_SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+
+
+def _reject_sensitive_name(cleaned: str) -> None:
+    name = cleaned.rsplit("/", 1)[-1].lower()
+    if name in _SENSITIVE_NAMES or name.startswith(".env") or name.endswith(_SENSITIVE_SUFFIXES):
+        raise ValueError(f"拒绝读取疑似凭据文件：{cleaned}")
+
 
 @dataclass(frozen=True)
 class SkillInfo:
@@ -183,6 +195,7 @@ class SkillRegistry:
         cleaned = (path or "").strip().replace("\\", "/").lstrip("/")
         if not cleaned or "\x00" in cleaned:
             raise ValueError("path 不能为空")
+        _reject_sensitive_name(cleaned)
 
         escaped = False
         for root in self.roots:
@@ -211,8 +224,6 @@ class SkillRegistry:
     def entries(self, directory: str = "") -> dict[str, object]:
         """列出 skill 根目录（或其子目录）下的条目，供 agent 查找 references。"""
         cleaned = (directory or "").strip().replace("\\", "/").strip("/")
-        items: list[dict[str, str]] = []
-        found = False
         for root in self.roots:
             base = root.resolve()
             target = (base / cleaned).resolve() if cleaned else base
@@ -222,15 +233,18 @@ class SkillRegistry:
                 continue
             if not target.is_dir():
                 continue
-            found = True
-            for child in sorted(target.iterdir()):
-                items.append(
-                    {
-                        "name": child.name,
-                        "path": child.relative_to(base).as_posix(),
-                        "type": "dir" if child.is_dir() else "file",
-                    }
-                )
-        if not found:
-            raise FileNotFoundError(f"skill 目录内没有这个路径：{cleaned or '.'}")
-        return {"directory": cleaned or ".", "items": items}
+            # 首个命中的 root 就返回，与 read() 保持同一套语义。
+            # 原先是遍历所有 root 往同一个列表里累加：配了多个
+            # HARNESS_SKILL_ROOTS 且目录名重叠时，列出来的某个
+            # business/x/y.md 会被 read_skill 解析到另一个 root 的同名文件，
+            # 列表里还会出现重复条目。
+            items = [
+                {
+                    "name": child.name,
+                    "path": child.relative_to(base).as_posix(),
+                    "type": "dir" if child.is_dir() else "file",
+                }
+                for child in sorted(target.iterdir())
+            ]
+            return {"directory": cleaned or ".", "items": items}
+        raise FileNotFoundError(f"skill 目录内没有这个路径：{cleaned or '.'}")

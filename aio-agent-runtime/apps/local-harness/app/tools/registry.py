@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -13,6 +15,26 @@ ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 # 浏览器只允许打开 http/https，且拒绝以 "-" 开头的值，避免被下游 CLI 当作选项解析。
 _ALLOWED_URL_SCHEMES = ("http://", "https://")
+
+
+logger = logging.getLogger(__name__)
+
+
+def _viewport_env(primary: str, fallback: str, default: int) -> int:
+    """读视口尺寸环境变量；填了非数字就退回默认值。
+
+    原来是在 handler 里直接 int()，填个 "abc" 会抛 ValueError——虽然会被
+    agent 的 except 兜住转成工具错误，但模型看到的是
+    "invalid literal for int()"，对它毫无指导性。
+    """
+    raw = (os.environ.get(primary) or os.environ.get(fallback) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("视口环境变量 %s/%s 不是整数：%r，改用默认值 %s", primary, fallback, raw, default)
+        return default
 
 
 def _validate_url(url: Any) -> str:
@@ -88,7 +110,11 @@ class ToolRegistry:
                 "list_files",
                 "列出 Sandbox workspace 中指定目录的文件。",
                 {**object_schema, "properties": {"path": {"type": "string"}}},
-                lambda args: self.sandbox.list_files(args.get("path", ".")),
+                # 用 or 而不是 get 的默认值：模型传 {"path": ""} 时键是存在的，
+                # 默认值不生效，空串会一路透传到 safe_path 换来一个 400。
+                # 而同一个 registry 里 list_skill_files 的描述明确写着「留空表示
+                # 根目录」，两个列目录工具语义相反，模型很容易踩。
+                lambda args: self.sandbox.list_files(args.get("path") or "."),
             )
         )
         self.register(
@@ -206,10 +232,8 @@ class ToolRegistry:
         if self.browser.enabled:
             async def _browser_open(args: dict[str, Any]) -> dict[str, Any]:
                 # 打开页面后强制视口为配置尺寸（默认 1368x1080），保证有头窗口内容区一致。
-                import os
-
-                width = max(1, int(os.environ.get("AGENT_BROWSER_WIDTH") or os.environ.get("SANDBOX_BROWSER_WIDTH") or "1368"))
-                height = max(1, int(os.environ.get("AGENT_BROWSER_HEIGHT") or os.environ.get("SANDBOX_BROWSER_HEIGHT") or "1080"))
+                width = _viewport_env("AGENT_BROWSER_WIDTH", "SANDBOX_BROWSER_WIDTH", 1368)
+                height = _viewport_env("AGENT_BROWSER_HEIGHT", "SANDBOX_BROWSER_HEIGHT", 1080)
                 open_result = await self.browser.run(["open", _validate_url(args["url"])])
                 try:
                     viewport_result = await self.browser.run(["set", "viewport", str(width), str(height)])

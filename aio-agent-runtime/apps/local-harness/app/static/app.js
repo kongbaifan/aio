@@ -69,8 +69,13 @@ function ensureMarkedConfigured() {
   return true;
 }
 
+// 打字机重绘的最小间隔（毫秒）。太小会退化成逐 token 全量重解析，
+// 太大则显得卡顿；80ms 下肉眼仍是连续输出。
+const STREAM_REPAINT_INTERVAL_MS = 80;
+
 // 把 Markdown 文本渲染进容器；解析或净化不可用时安全回退为纯文本。
-function renderMarkdownInto(container, text) {
+// highlight=false 时跳过代码高亮，供流式途中的高频重绘使用。
+function renderMarkdownInto(container, text, { highlight = true } = {}) {
   const raw = text == null ? "" : String(text);
   if (!window.marked || !window.DOMPurify) {
     container.textContent = raw;
@@ -86,7 +91,7 @@ function renderMarkdownInto(container, text) {
       anchor.rel = "noopener noreferrer";
     });
     // 代码块高亮：净化后逐个交给 highlight.js。
-    if (window.hljs) {
+    if (highlight && window.hljs) {
       container.querySelectorAll("pre code").forEach(block => {
         try {
           window.hljs.highlightElement(block);
@@ -317,22 +322,28 @@ function beginStreamingMessage() {
   refreshIcons();
   scrollChatToEnd();
   let text = "";
-  let raf = 0;
+  let timer = 0;
   const paint = () => {
-    raf = 0;
-    renderMarkdownInto(body, text);
+    timer = 0;
+    // 流式途中跳过代码高亮：highlightElement 要对每个代码块做一遍词法分析，
+    // 是这条路径上最贵的一步，而中途的高亮结果马上又会被下一帧覆盖。
+    renderMarkdownInto(body, text, { highlight: false });
     scrollChatToEnd();
   };
   return {
     push(piece) {
       text += piece;
-      // 用 rAF 合批，避免每个 token 都触发一次 Markdown 解析。
-      if (!raf) raf = requestAnimationFrame(paint);
+      // 按固定间隔节流，而不是每个 token 都重绘。
+      // paint 会对【累积全文】重跑 marked.parse + sanitize + innerHTML 全量替换，
+      // 逐 token 触发的话长答案是 O(n²)；而且每次重建 DOM 都会清掉用户
+      // 正在选中的文本，生成过程中根本没法复制。
+      if (!timer) timer = setTimeout(paint, STREAM_REPAINT_INTERVAL_MS);
     },
     finalize() {
-      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (timer) { clearTimeout(timer); timer = 0; }
       body.classList.remove("streaming");
-      renderMarkdownInto(body, text);
+      // 定稿时才做完整渲染（含高亮）。
+      renderMarkdownInto(body, text, { highlight: true });
       scrollChatToEnd();
     },
     get text() { return text; },
@@ -691,7 +702,13 @@ async function sendMessage(message) {
         if (frame.provider && frame.model) {
           setSelectedModel(frame.provider, frame.model, { persist: true, syncSelect: true });
         }
-        renderFiles(frame.files || [], ".");
+        // done 帧带的是根目录列表。用户如果正浏览子目录，就别把他踢回根目录
+        // （连带 state.path 和「返回上级」的基准一起错乱），改为刷新他所在的那层。
+        if (!state.path || state.path === ".") {
+          renderFiles(frame.files || [], ".");
+        } else {
+          loadFiles(state.path);
+        }
         appendUsageNote(frame.usage, frame.session_usage);
       } else if (frame.kind === "error") {
         if (stream) { stream.finalize(); stream = null; }
