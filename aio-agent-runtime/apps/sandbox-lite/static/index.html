@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIO Sandbox Lite</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  height: 100vh; overflow: hidden; background: #1e1e1e; color: #e0e0e0;
+}
+.toolbar {
+  height: 48px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+  display: flex; align-items: center; padding: 0 16px; gap: 12px; user-select: none; flex-shrink: 0;
+}
+.toolbar-title { font-weight: 500; font-size: 14px; color: #ccc; margin-right: auto; }
+.panel-toggles { display: flex; gap: 8px; }
+.panel-toggle {
+  padding: 6px 12px; background: #3c3c3c; border: 1px solid #555;
+  border-radius: 4px; color: #ccc; cursor: pointer; font-size: 13px;
+  transition: all 0.2s; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.panel-toggle:hover { background: #4a4a4a; border-color: #6a6a6a; }
+.panel-toggle.active { background: #0e639c; border-color: #1177bb; color: #fff; }
+.panel-toggle .indicator {
+  width: 8px; height: 8px; border-radius: 50%; background: #6c6c6c;
+}
+.panel-toggle.active .indicator { background: #4dff4d; box-shadow: 0 0 4px #4dff4d; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-dot.online { background: #4dff4d; }
+.status-dot.offline { background: #f44747; }
+
+.workspace {
+  height: calc(100vh - 48px); display: flex; flex-direction: row;
+}
+.panel-container { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.panel-container.horizontal { flex-direction: row; }
+.panel-container.vertical { flex-direction: column; }
+.panel {
+  flex: 1; display: none; background: #1e1e1e;
+  min-width: 0; min-height: 0; overflow: hidden; flex-direction: column;
+}
+.panel.active { display: flex; }
+.panel-header {
+  height: 32px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+  display: flex; align-items: center; padding: 0 12px; user-select: none; flex-shrink: 0;
+}
+.panel-title { font-size: 13px; color: #ccc; flex: 1; }
+.panel-actions { display: flex; gap: 4px; }
+.panel-action {
+  width: 22px; height: 22px; background: transparent; border: none;
+  color: #999; cursor: pointer; border-radius: 3px; font-size: 14px; line-height: 22px; text-align: center;
+}
+.panel-action:hover { background: #3c3c3c; color: #ccc; }
+.panel-content { flex: 1; overflow: auto; position: relative; }
+
+/* Sidebar */
+.sidebar {
+  width: 220px; background: #252526; border-right: 1px solid #3e3e42;
+  display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden;
+}
+.sidebar.hidden { display: none; }
+.sidebar-title {
+  padding: 8px 12px; font-size: 11px; text-transform: uppercase;
+  color: #888; letter-spacing: 0.5px; border-bottom: 1px solid #3e3e42;
+}
+.file-tree { flex: 1; overflow-y: auto; font-size: 13px; padding: 4px 0; }
+.file-item {
+  display: flex; align-items: center; gap: 6px; padding: 3px 12px 3px 20px;
+  cursor: pointer; color: #ccc; white-space: nowrap;
+}
+.file-item:hover { background: #2a2d2e; }
+.file-item.active { background: #37373d; color: #fff; }
+.file-item .icon { flex-shrink: 0; }
+.file-item .name { overflow: hidden; text-overflow: ellipsis; }
+.file-item.dir { font-weight: 500; }
+.file-item .arrow { transition: transform 0.15s; }
+.file-item .arrow.open { transform: rotate(90deg); }
+
+/* Code Panel */
+.code-panel { height: 100%; display: flex; flex-direction: column; }
+.code-tabs {
+  display: flex; background: #2d2d30; border-bottom: 1px solid #3e3e42; overflow-x: auto; flex-shrink: 0;
+}
+.code-tab {
+  padding: 6px 14px; font-size: 13px; color: #999; cursor: pointer;
+  border-right: 1px solid #3e3e42; user-select: none; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px;
+}
+.code-tab.active { color: #fff; background: #1e1e1e; border-bottom: 1px solid #1e1e1e; }
+.code-tab .close { font-size: 16px; line-height: 1; opacity: 0; }
+.code-tab:hover .close { opacity: 0.6; }
+.code-tab .close:hover { opacity: 1; }
+.code-editor-wrapper {
+  flex: 1; display: flex; overflow: hidden; position: relative;
+}
+.code-gutter {
+  width: 48px; flex-shrink: 0; background: #252526;
+  border-right: 1px solid #3e3e42; padding: 16px 8px 16px 0;
+  text-align: right; font-family: 'Consolas', 'Cascadia Code', monospace;
+  font-size: 14px; line-height: 1.6; color: #555; user-select: none;
+  overflow: hidden; position: relative;
+}
+.code-gutter .line-num { display: block; }
+.code-gutter .line-num.error-mark { background: #f44747; color: #fff; border-radius: 0 3px 3px 0; padding-right: 4px; }
+.code-body {
+  flex: 1; padding: 16px 16px 16px 12px; font-family: 'Consolas', 'Cascadia Code', monospace;
+  font-size: 14px; line-height: 1.6; overflow: auto; white-space: pre; tab-size: 4;
+  outline: none; color: #d4d4d4; background: #1e1e1e;
+}
+.code-errors {
+  position: absolute; top: 8px; right: 8px; max-width: 60%;
+  background: #5a1d1d; border: 1px solid #f44747; border-radius: 4px;
+  padding: 8px 12px; font-size: 12px; color: #f48787; display: none;
+  z-index: 10; white-space: pre-wrap; font-family: 'Consolas', monospace;
+}
+.code-errors.show { display: block; }
+.code-errors .err-title { color: #f44747; font-weight: 500; margin-bottom: 4px; }
+
+/* Terminal */
+.terminal-panel { height: 100%; display: flex; flex-direction: column; background: #1e1e1e; }
+.terminal-output {
+  flex: 1; overflow-y: auto; font-family: 'Consolas', 'Cascadia Code', monospace;
+  font-size: 14px; line-height: 1.5; color: #d4d4d4; padding: 8px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.terminal-output .info { color: #569cd6; }
+.terminal-output .prompt { color: #6a9955; }
+.terminal-output .error { color: #f44747; }
+.terminal-input-line {
+  display: flex; align-items: center; padding: 4px 8px;
+  border-top: 1px solid #3e3e42; flex-shrink: 0;
+}
+.terminal-input-line .prompt { color: #6a9955; font-family: 'Consolas', 'Cascadia Code', monospace; font-size: 14px; margin-right: 4px; flex-shrink: 0; }
+.terminal-input-line input {
+  flex: 1; background: transparent; border: none; color: #d4d4d4;
+  font-family: 'Consolas', 'Cascadia Code', monospace; font-size: 14px;
+  outline: none; caret-color: #d4d4d4;
+}
+
+/* Browser */
+.browser-panel { height: 100%; display: flex; flex-direction: column; }
+.browser-addr {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: #2d2d30; border-bottom: 1px solid #3e3e42; flex-shrink: 0;
+}
+.browser-addr button {
+  width: 26px; height: 26px; border: none; border-radius: 4px;
+  cursor: pointer; background: transparent; color: #999; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.browser-addr button:hover { background: #3c3c3c; color: #ccc; }
+.browser-addr input {
+  flex: 1; padding: 4px 10px; border: none; border-radius: 4px;
+  font-size: 13px; outline: none; background: #3c3c3c; color: #ccc;
+}
+.browser-view {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  background: #fff; color: #999; font-size: 14px; overflow: auto;
+}
+.browser-view iframe { width: 100%; height: 100%; border: none; }
+
+/* Execute Panel */
+.exec-panel { height: 100%; display: flex; flex-direction: column; }
+.exec-input { flex: 1; min-height: 0; position: relative; }
+.exec-input textarea {
+  width: 100%; height: 100%; padding: 16px; border: none; resize: none;
+  font-family: 'Consolas', 'Cascadia Code', monospace; font-size: 14px;
+  outline: none; background: #1e1e1e; color: #d4d4d4; tab-size: 4;
+}
+.exec-run {
+  position: absolute; bottom: 16px; right: 16px;
+  padding: 8px 20px; background: #0e639c; border: none; border-radius: 4px;
+  color: #fff; cursor: pointer; font-size: 13px;
+}
+.exec-run:hover { background: #1177bb; }
+.exec-output {
+  height: 200px; min-height: 100px;
+  padding: 12px; overflow-y: auto;
+  font-family: 'Consolas', 'Cascadia Code', monospace; font-size: 13px;
+  color: #d4d4d4; background: #1e1e1e; border-top: 1px solid #3e3e42; white-space: pre-wrap;
+}
+.exec-output .out { color: #d4d4d4; }
+.exec-output .err { color: #f44747; }
+
+/* Status bar */
+.status-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; height: 24px;
+  background: #007acc; color: #fff; font-size: 12px; padding: 0 12px;
+  display: flex; align-items: center; gap: 16px; z-index: 100;
+}
+.status-bar .left { display: flex; gap: 16px; }
+.status-bar .right { margin-left: auto; display: flex; gap: 16px; }
+
+.resizer {
+  position: absolute; background: transparent; z-index: 10;
+}
+.resizer:hover { background: #007acc; }
+.resizer.horizontal { width: 4px; height: 100%; cursor: col-resize; right: -2px; top: 0; }
+.resizer.vertical { width: 100%; height: 4px; cursor: row-resize; bottom: -2px; left: 0; }
+
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); display: none; justify-content: center;
+  align-items: center; z-index: 10000;
+}
+.modal-overlay.active { display: flex; }
+.modal-box {
+  width: 80%; max-width: 900px; max-height: 80vh;
+  background: #2d2d30; border-radius: 8px; display: flex; flex-direction: column;
+}
+.modal-header {
+  padding: 12px 16px; border-bottom: 1px solid #3e3e42;
+  display: flex; align-items: center;
+}
+.modal-header span { flex: 1; font-weight: 500; }
+.modal-header button { width: 28px; height: 28px; border: none; background: transparent; color: #999; cursor: pointer; font-size: 20px; }
+.modal-header button:hover { color: #fff; }
+.modal-body { flex: 1; padding: 16px; overflow: auto; }
+.modal-body h3 { color: #569cd6; margin: 16px 0 8px; }
+.modal-body h3:first-child { margin-top: 0; }
+.modal-body p { line-height: 1.6; margin-bottom: 8px; }
+.modal-body code {
+  background: #1e1e1e; padding: 2px 6px; border-radius: 3px; font-size: 13px;
+}
+.modal-body pre {
+  background: #1e1e1e; padding: 12px; border-radius: 4px; overflow: auto;
+  font-size: 13px; margin: 8px 0;
+}
+
+.empty-state {
+  display: flex; align-items: center; justify-content: center;
+  flex: 1; color: #555; font-size: 14px; flex-direction: column; gap: 8px;
+}
+.empty-state .big-icon { font-size: 48px; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <div class="toolbar-title">AIO Sandbox Lite <span id="statusDot" class="status-dot offline"></span></div>
+  <div class="panel-toggles">
+    <button class="panel-toggle active" data-panel="files"><span class="indicator"></span> Files</button>
+    <button class="panel-toggle active" data-panel="editor"><span class="indicator"></span> Code</button>
+    <button class="panel-toggle" data-panel="terminal"><span class="indicator"></span> Terminal</button>
+    <button class="panel-toggle" data-panel="execute"><span class="indicator"></span> Run</button>
+    <button class="panel-toggle" data-panel="browser"><span class="indicator"></span> Web</button>
+  </div>
+  <button class="panel-toggle" onclick="showAbout()" style="margin-left:8px;">About</button>
+</div>
+
+<div class="workspace">
+  <div class="sidebar" id="fileSidebar">
+    <div class="sidebar-title">Explorer</div>
+    <div class="file-tree" id="fileTree">
+      <div class="empty-state" style="padding:20px;color:#666;">Loading...</div>
+    </div>
+  </div>
+  <div class="panel-container horizontal" id="mainContainer"></div>
+</div>
+
+<div class="modal-overlay" id="aboutModal">
+  <div class="modal-box">
+    <div class="modal-header"><span>About AIO Sandbox Lite</span><button onclick="closeAbout()">×</button></div>
+    <div class="modal-body"></div>
+  </div>
+</div>
+
+<!-- Panel Templates -->
+<div id="templates" style="display:none">
+  <!-- Editor -->
+  <div class="panel-content code-panel" data-template="editor">
+    <div class="code-tabs" id="editorTabs">
+      <div class="code-tab active">untitled.py <span class="close">×</span></div>
+      <span style="margin-left:auto;display:flex;gap:4px;padding:0 8px;">
+        <button class="panel-toggle" onclick="checkSyntax()" style="font-size:12px;padding:2px 10px;">✓ Check</button>
+      </span>
+    </div>
+    <div class="code-editor-wrapper">
+      <div class="code-gutter" id="editorGutter"></div>
+      <div class="code-body" id="editorBody" contenteditable spellcheck="false" oninput="updateGutter()"></div>
+      <div class="code-errors" id="editorErrors"><div class="err-title">✗ Syntax Error</div><span id="errorMsg"></span></div>
+    </div>
+  </div>
+
+  <!-- Terminal -->
+  <div class="panel-content terminal-panel" data-template="terminal">
+    <div class="terminal-output" id="termOutput">
+      <span class="info">[System] AIO Sandbox Terminal</span>
+      <span class="info">[System] Type 'help' for commands</span>
+    </div>
+    <div class="terminal-input-line">
+      <span class="prompt">sandbox:~$</span>
+      <input type="text" id="termInput" autofocus placeholder="Type command..." spellcheck="false">
+    </div>
+  </div>
+
+  <!-- Execute -->
+  <div class="panel-content exec-panel" data-template="execute">
+    <div class="exec-input">
+      <textarea id="execCode" placeholder="Write Python code here...&#10;&#10;Example:&#10;print('hello world')&#10;[1,2,3,4,5].map(lambda x: x**2)">print("Hello, AIO Sandbox!")
+</textarea>
+      <button class="exec-run" onclick="runCode()">▶ Run</button>
+    </div>
+    <div class="exec-output" id="execOutput"></div>
+  </div>
+
+  <!-- Browser -->
+  <div class="panel-content browser-panel" data-template="browser">
+    <div class="browser-addr">
+      <button onclick="browserBack()">◀</button>
+      <button onclick="browserForward()">▶</button>
+      <button onclick="browserRefresh()">⟳</button>
+      <input type="text" id="browserUrl" value="http://127.0.0.1:8080/v1/sandbox" onkeydown="if(event.key==='Enter')browserNavigate()">
+      <button onclick="browserNavigate()">Go</button>
+    </div>
+    <div class="browser-view" id="browserView">
+      <div class="empty-state"><div class="big-icon">🌐</div><div>Enter a URL to navigate</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+
+// ─── Workspace Manager ─────────────────────────────────────────
+const workspace = {
+  panels: {
+    files:    { title: 'Files',    active: true,  template: null },
+    editor:   { title: 'Code',     active: true,  template: 'editor' },
+    terminal: { title: 'Terminal', active: false, template: 'terminal' },
+    execute:  { title: 'Run',      active: false, template: 'execute' },
+    browser:  { title: 'Browser',  active: false, template: 'browser' },
+  },
+  layout: 'grid',
+  resizeHandler: null,
+
+  init() {
+    this.loadState();
+    this.renderAll();
+    this.bindEvents();
+    this.initFileTree();
+    this.initTerminal();
+    this.initExec();
+    this.initEditorLint();
+    setInterval(() => this.healthCheck(), 5000);
+  },
+
+  loadState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sandboxState'));
+      if (saved) {
+        Object.keys(saved.panels).forEach(k => {
+          if (this.panels[k]) this.panels[k].active = saved.panels[k];
+        });
+        if (saved.layout) this.layout = saved.layout;
+      }
+    } catch(e) {}
+  },
+
+  saveState() {
+    const panels = {};
+    Object.entries(this.panels).forEach(([k, v]) => { panels[k] = v.active; });
+    localStorage.setItem('sandboxState', JSON.stringify({ panels, layout: this.layout }));
+  },
+
+  bindEvents() {
+    document.querySelectorAll('.panel-toggle[data-panel]').forEach(btn => {
+      btn.addEventListener('click', () => this.togglePanel(btn.dataset.panel));
+    });
+    document.addEventListener('mousemove', (e) => { if (this.resizeHandler) this.resizeHandler(e); });
+    document.addEventListener('mouseup', () => {
+      if (this.resizeHandler) { this.resizeHandler = null; document.getElementById('dragOverlay')?.remove(); }
+    });
+    window.addEventListener('resize', () => this.renderAll());
+  },
+
+  togglePanel(id) {
+    const p = this.panels[id];
+    if (!p) return;
+    p.active = !p.active;
+    document.querySelectorAll(`.panel-toggle[data-panel="${id}"]`).forEach(b => b.classList.toggle('active', p.active));
+    this.renderAll();
+    this.saveState();
+  },
+
+  getActive() {
+    return Object.entries(this.panels).filter(([_, p]) => p.active);
+  },
+
+  renderAll() {
+    const container = document.getElementById('mainContainer');
+    container.innerHTML = '';
+    const active = this.getActive();
+    if (active.length === 0) {
+      container.innerHTML = '<div class="empty-state" style="flex:1"><div class="big-icon">📦</div><div>No panels open</div></div>';
+      return;
+    }
+    // File sidebar visibility
+    const hasFiles = this.panels.files.active;
+    document.getElementById('fileSidebar').classList.toggle('hidden', !hasFiles);
+    this.applyLayout(container, active.filter(([id]) => id !== 'files'));
+    Object.entries(this.panels).forEach(([id, p]) => {
+      document.querySelectorAll(`.panel-toggle[data-panel="${id}"]`).forEach(b => b.classList.toggle('active', p.active));
+    });
+  },
+
+  applyLayout(container, panels) {
+    container.className = 'panel-container horizontal';
+    if (panels.length === 0) {
+      container.innerHTML = '<div class="empty-state" style="flex:1"><div class="big-icon">📦</div><div>Select panels to display</div></div>';
+      return;
+    }
+    panels.forEach(([id, p]) => this.createPanel(container, id, p));
+  },
+
+  createPanel(parent, id, pData) {
+    const panel = document.createElement('div');
+    panel.className = 'panel active';
+    panel.dataset.panelId = id;
+    const header = document.createElement('div');
+    header.className = 'panel-header';
+    header.innerHTML = `
+      <div class="panel-title">${pData.title}</div>
+      <div class="panel-actions">
+        <button class="panel-action" onclick="workspace.maximize('${id}')" title="Maximize">⬜</button>
+        <button class="panel-action" onclick="workspace.close('${id}')" title="Close">×</button>
+      </div>`;
+    panel.appendChild(header);
+    if (pData.template) {
+      const tmpl = document.querySelector(`[data-template="${pData.template}"]`);
+      if (tmpl) {
+        const content = tmpl.cloneNode(true);
+        content.removeAttribute('data-template');
+        panel.appendChild(content);
+      }
+    } else {
+      const content = document.createElement('div');
+      content.className = 'panel-content';
+      panel.appendChild(content);
+    }
+    parent.appendChild(panel);
+    // Resizer
+    const siblings = Array.from(parent.children).filter(c => c.classList.contains('panel'));
+    if (siblings.length > 1) {
+      const prev = siblings[siblings.length - 2];
+      const resizer = document.createElement('div');
+      resizer.className = 'resizer horizontal';
+      resizer.addEventListener('mousedown', (e) => {
+        const startX = e.clientX;
+        const startW = prev.offsetWidth;
+        const startW2 = panel.offsetWidth;
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:col-resize;';
+        document.body.appendChild(overlay);
+        this.resizeHandler = (ev) => {
+          const delta = ev.clientX - startX;
+          const nw = startW + delta;
+          const nw2 = startW2 - delta;
+          if (nw > 100 && nw2 > 100) {
+            prev.style.flex = `0 0 ${nw}px`;
+            panel.style.flex = `0 0 ${nw2}px`;
+          }
+        };
+        document.addEventListener('mouseup', () => {
+          overlay.remove();
+          this.resizeHandler = null;
+        }, { once: true });
+        e.preventDefault();
+      });
+      prev.appendChild(resizer);
+    }
+  },
+
+  maximize(id) {
+    Object.keys(this.panels).forEach(k => {
+      this.panels[k]._saved = this.panels[k]._saved !== undefined ? this.panels[k]._saved : this.panels[k].active;
+      this.panels[k].active = (k === id);
+    });
+    this.renderAll();
+  },
+
+  close(id) {
+    this.panels[id].active = false;
+    this.renderAll();
+    this.saveState();
+  },
+
+  // ── Health ──────────────────────────────────────────────────
+  async healthCheck() {
+    try {
+      const r = await fetch(`${API}/healthz`);
+      const dot = document.getElementById('statusDot');
+      dot.className = r.ok ? 'status-dot online' : 'status-dot offline';
+    } catch(e) {
+      document.getElementById('statusDot').className = 'status-dot offline';
+    }
+  },
+
+  // ── File Tree ───────────────────────────────────────────────
+  async initFileTree() {
+    await this.loadDir('.');
+  },
+
+  async loadDir(path, parentEl) {
+    try {
+      const r = await fetch(`${API}/v1/files?path=${encodeURIComponent(path)}`);
+      const data = await r.json();
+      if (!parentEl) {
+        const tree = document.getElementById('fileTree');
+        tree.innerHTML = '';
+        parentEl = tree;
+      } else {
+        parentEl.innerHTML = '';
+      }
+      data.items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = `file-item ${item.type === 'dir' ? 'dir' : ''}`;
+        if (item.type === 'dir') {
+          div.innerHTML = `<span class="arrow">▶</span><span class="icon">📁</span><span class="name">${item.name}</span>`;
+          div.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const arrow = div.querySelector('.arrow');
+            const sub = div.nextElementSibling;
+            if (sub && sub.classList.contains('file-children')) {
+              sub.remove();
+              arrow.textContent = '▶';
+            } else {
+              const children = document.createElement('div');
+              children.className = 'file-children';
+              div.after(children);
+              arrow.textContent = '▼';
+              this.loadDir(item.path, children);
+            }
+          });
+        } else {
+          div.innerHTML = `<span class="icon">📄</span><span class="name">${item.name}</span>`;
+          div.addEventListener('click', () => this.openFile(item.path));
+        }
+        parentEl.appendChild(div);
+      });
+      if (data.items.length === 0) {
+        parentEl.innerHTML = '<div style="padding:12px;color:#666;">Empty directory</div>';
+      }
+    } catch(e) {
+      if (!parentEl) {
+        document.getElementById('fileTree').innerHTML = '<div style="padding:12px;color:#f44747;">Failed to load files</div>';
+      }
+    }
+  },
+
+  async openFile(filePath) {
+    try {
+      const r = await fetch(`${API}/v1/files/read?path=${encodeURIComponent(filePath)}`);
+      const data = await r.json();
+      const tabs = document.getElementById('editorTabs');
+      const body = document.getElementById('editorBody');
+      // Add tab
+      const tab = document.createElement('div');
+      tab.className = 'code-tab active';
+      tab.innerHTML = `${filePath.split('/').pop()} <span class="close">×</span>`;
+      tabs.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+      tabs.prepend(tab);
+      body.textContent = data.content;
+      // Ensure editor panel is active
+      if (!this.panels.editor.active) {
+        this.togglePanel('editor');
+      }
+    } catch(e) {
+      alert('Failed to open file: ' + e.message);
+    }
+  },
+
+  // ── Editor Lint ──────────────────────────────────────────────
+  initEditorLint() {
+    const body = document.getElementById('editorBody');
+    if (!body) return;
+    body.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const sel = window.getSelection();
+        if (!sel.rangeCount) return;
+        const range = sel.getRangeAt(0);
+        range.insertNode(document.createTextNode('    '));
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    });
+    // Initial gutter
+    setTimeout(() => this.updateGutter(), 100);
+  },
+
+  // ── Update Gutter ────────────────────────────────────────────
+  updateGutter() {
+    const body = document.getElementById('editorBody');
+    const gutter = document.getElementById('editorGutter');
+    if (!body || !gutter) return;
+    const lines = body.textContent.split('\n').length || 1;
+    gutter.innerHTML = '';
+    for (let i = 1; i <= lines; i++) {
+      const el = document.createElement('span');
+      el.className = 'line-num';
+      el.id = `ln-${i}`;
+      el.textContent = i;
+      gutter.appendChild(el);
+    }
+  },
+};
+
+// ── Gutter and Lint (standalone) ───────────────────────────────
+let lastLintErrors = [];
+
+function updateGutter() {
+  if (workspace) workspace.updateGutter();
+}
+
+async function checkSyntax() {
+  const body = document.getElementById('editorBody');
+  const errorsEl = document.getElementById('editorErrors');
+  const errorMsg = document.getElementById('errorMsg');
+  const gutter = document.getElementById('editorGutter');
+  if (!body) return;
+
+  // Clear previous errors
+  errorsEl.classList.remove('show');
+  gutter.querySelectorAll('.error-mark').forEach(el => el.classList.remove('error-mark'));
+  lastLintErrors = [];
+
+  const code = body.textContent;
+  if (!code.trim()) return;
+
+  try {
+    const r = await fetch(`${API}/v1/lint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: 'python' }),
+    });
+    const data = await r.json();
+
+    if (data.errors && data.errors.length > 0) {
+      lastLintErrors = data.errors;
+      const msgs = data.errors.map(e =>
+        `Line ${e.line}: ${e.message}`
+      ).join('\n');
+      errorMsg.textContent = msgs;
+      errorsEl.classList.add('show');
+
+      // Highlight error lines in gutter
+      data.errors.forEach(err => {
+        const ln = document.getElementById(`ln-${err.line}`);
+        if (ln) ln.classList.add('error-mark');
+      });
+    } else {
+      // Flash success
+      const checkBtn = document.querySelector('.panel-toggle[onclick="checkSyntax()"]');
+      if (checkBtn) {
+        const orig = checkBtn.textContent;
+        checkBtn.textContent = '✓ OK';
+        checkBtn.style.background = '#1a7a3a';
+        setTimeout(() => {
+          checkBtn.textContent = orig;
+          checkBtn.style.background = '';
+        }, 1500);
+      }
+    }
+  } catch(e) {
+    errorMsg.textContent = 'Lint request failed: ' + e.message;
+    errorsEl.classList.add('show');
+  }
+}
+
+// Replace runCode to always check syntax first
+const _origRunCode = async function() {
+  const code = document.getElementById('execCode').value;
+  const output = document.getElementById('execOutput');
+  if (!code.trim()) return;
+  output.innerHTML = '<span style="color:#888;">Running...</span>';
+  try {
+    const r = await fetch(`${API}/v1/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: 'python', session_id: currentSessionId }),
+    });
+    const data = await r.json();
+    currentSessionId = data.session_id;
+    let html = '';
+    if (data.output) html += `<span class="out">${escapeHtml(data.output)}</span>`;
+    if (data.error) html += `<span class="err">${escapeHtml(data.error)}</span>`;
+    if (!data.output && !data.error) html += '<span style="color:#888;">(no output)</span>';
+    html += `<span style="color:#888;font-size:12px;">exit: ${data.exit_code} | session: ${data.session_id}</span>`;
+    output.innerHTML = html;
+  } catch(e) {
+    output.innerHTML = `<span class="err">Error: ${escapeHtml(e.message)}</span>`;
+  }
+};
+
+async function runCode() {
+  await checkSyntax();
+  if (lastLintErrors.length > 0) {
+    document.getElementById('execOutput').innerHTML =
+      '<span class="err">✗ Syntax errors found. Fix them before running.</span>';
+    return;
+  }
+  await _origRunCode();
+}
+
+// ─── Terminal ───────────────────────────────────────────────────
+let termWs = null;
+let termConnected = false;
+
+function initTerminal() {
+  const input = document.getElementById('termInput');
+  const output = document.getElementById('termOutput');
+  if (!input) return;
+
+  function connectWs() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/v1/shell/ws`;
+    termWs = new WebSocket(url);
+    termWs.onopen = () => {
+      termConnected = true;
+      input.disabled = false;
+      input.focus();
+    };
+    termWs.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'output' || msg.type === 'ready') {
+        output.innerHTML += msg.data;
+        output.scrollTop = output.scrollHeight;
+      } else if (msg.type === 'error') {
+        output.innerHTML += `<span class="error">${msg.data}</span>`;
+        output.scrollTop = output.scrollHeight;
+      }
+    };
+    termWs.onclose = () => {
+      termConnected = false;
+      input.disabled = true;
+    };
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const cmd = input.value;
+      if (termConnected && termWs?.readyState === WebSocket.OPEN) {
+        termWs.send(JSON.stringify({ type: 'input', data: cmd + '\n' }));
+      }
+      output.innerHTML += `\n<span class="prompt">sandbox:~$</span> ${cmd}`;
+      output.scrollTop = output.scrollHeight;
+      input.value = '';
+    }
+  });
+
+  connectWs();
+}
+
+// ─── Browser Mock ───────────────────────────────────────────────
+let browserHistory = ['http://127.0.0.1:8080/v1/sandbox'];
+let browserIndex = 0;
+
+function browserNavigate() {
+  const url = document.getElementById('browserUrl').value;
+  browserHistory = browserHistory.slice(0, browserIndex + 1);
+  browserHistory.push(url);
+  browserIndex = browserHistory.length - 1;
+  loadBrowserUrl(url);
+}
+
+function browserBack() {
+  if (browserIndex > 0) {
+    browserIndex--;
+    const url = browserHistory[browserIndex];
+    document.getElementById('browserUrl').value = url;
+    loadBrowserUrl(url);
+  }
+}
+
+function browserForward() {
+  if (browserIndex < browserHistory.length - 1) {
+    browserIndex++;
+    const url = browserHistory[browserIndex];
+    document.getElementById('browserUrl').value = url;
+    loadBrowserUrl(url);
+  }
+}
+
+function browserRefresh() {
+  loadBrowserUrl(document.getElementById('browserUrl').value);
+}
+
+function loadBrowserUrl(url) {
+  const view = document.getElementById('browserView');
+  try {
+    new URL(url);
+    view.innerHTML = `<iframe src="${url}" sandbox="allow-scripts allow-same-origin"></iframe>`;
+  } catch(e) {
+    view.innerHTML = `<div class="empty-state"><div class="big-icon">⚠️</div><div>Invalid URL</div></div>`;
+  }
+}
+
+// ─── About ─────────────────────────────────────────────────────
+function showAbout() {
+  const modal = document.getElementById('aboutModal');
+  const body = modal.querySelector('.modal-body');
+  body.innerHTML = `
+    <h3>AIO Sandbox Lite v1.0.0</h3>
+    <p>Based on the <strong>Super Doubao Runtime</strong> architecture.</p>
+
+    <h3>Architecture</h3>
+    <pre>
+┌─────────────────────────────────────┐
+│         AIO Sandbox Lite            │
+├─────────────────────────────────────┤
+│  Frontend (HTML/JS)                 │
+│      ↕ HTTP REST / WebSocket        │
+│  FastAPI Backend (Python 3.11)      │
+│      ↕ subprocess / filesystem      │
+│  Workspace (./tmp/)                  │
+└─────────────────────────────────────┘</pre>
+
+    <h3>Endpoints</h3>
+    <pre>GET  /healthz          - Health check
+GET  /v1/sandbox        - System info
+GET  /v1/files          - List files
+GET  /v1/files/read     - Read file
+POST /v1/files/write    - Write file
+POST /v1/files/mkdir    - Create directory
+POST /v1/files/delete   - Delete file
+POST /v1/files/upload   - Upload file
+GET  /v1/files/download - Download file
+POST /v1/execute        - Execute Python code
+WS  /v1/shell/ws       - Terminal session
+GET  /v1/metrics        - System metrics</pre>
+
+    <h3>Source Directories</h3>
+    <p>This demo references code from:</p>
+    <ul style="margin-left:20px;line-height:1.8;">
+      <li><code>03_python_server_source/</code> - FastAPI server pattern</li>
+      <li><code>11_frontend_ui/</code> - HTML dashboard design</li>
+      <li><code>09_nodejs_repl_server/</code> - Code execution model</li>
+      <li><code>04_gem_process_manager/</code> - Process orchestration</li>
+    </ul>
+  `;
+  modal.classList.add('active');
+}
+
+function closeAbout() {
+  document.getElementById('aboutModal').classList.remove('active');
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+// ─── Init ───────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => workspace.init());
+</script>
+</body>
+</html>
