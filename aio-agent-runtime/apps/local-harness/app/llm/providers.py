@@ -108,6 +108,8 @@ def _resolve_secret_value(raw: str | None) -> str:
     if not value:
         return ""
     if value.startswith("!"):
+        from ..platform_settings import require_legacy_mode
+        require_legacy_mode()
         try:
             completed = subprocess.run(
                 value[1:],

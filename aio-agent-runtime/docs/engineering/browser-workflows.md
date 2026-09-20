@@ -2,7 +2,7 @@
 
 End-to-end patterns for common browser automation tasks.
 
-**Related**: [browser.md](browser.md) for full command reference, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [browser.md](../../skills/system/aio-sandbox/references/browser.md) for full command reference, [SKILL.md](../../skills/system/aio-sandbox/SKILL.md) for quick start.
 
 ## Contents
 

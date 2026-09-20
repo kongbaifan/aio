@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from ..config import Settings
+from ..platform_settings import require_legacy_mode
 from .base import ModelClient
 from .openai_compatible import OpenAICompatibleClient
 from .providers import ModelRef, ModelRegistry, parse_model_ref
@@ -17,6 +18,7 @@ class ModelService:
     """模型目录 + 客户端缓存。支持工作台按 provider/model 切换。"""
 
     def __init__(self, settings: Settings):
+        require_legacy_mode()
         self.settings = settings
         self.registry = ModelRegistry.load(settings.models_json or None)
         self._clients: dict[str, ModelClient] = {}

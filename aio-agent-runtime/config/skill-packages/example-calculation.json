@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "example-calculation",
+  "version": "1.0.0",
+  "description": "示例：使用整数最小货币单位计算合计，不包含真实业务数据。",
+  "source": "aio-agent-runtime 内部演示模板；正式使用前需公司审核",
+  "license": "Internal demonstration only",
+  "instruction_path": "SKILL.md",
+  "reference_paths": ["references/rules.md"],
+  "files": [
+    {
+      "path": "SKILL.md",
+      "content": "# 合计计算示例\n先确认数量和单价。单价以整数最小货币单位表示，再调用 example_calculate_total。不要猜测缺失字段，不要访问其他项目或任何外部业务系统。\n"
+    },
+    {
+      "path": "references/rules.md",
+      "content": "这是计算格式示例，不是财务政策。所有金额使用整数最小单位；调用方必须自行确认实际币种、税务和业务适用性。\n"
+    },
+    {
+      "path": "scripts/calculate.py",
+      "content": "import json\nfrom pathlib import Path\n\ndef run(payload):\n    result = {'total_minor': payload['unit_price_minor'] * payload['quantity']}\n    Path('calculation-result.json').write_text(json.dumps(result), encoding='utf-8')\n    return result\n"
+    }
+  ],
+  "entrypoints": [
+    {
+      "name": "example_calculate_total",
+      "path": "scripts/calculate.py",
+      "description": "在无网络 Python 环境中计算整数合计，并生成 JSON 结果文件。",
+      "timeout_seconds": 10,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "unit_price_minor": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+          "quantity": {"type": "integer", "minimum": 0, "maximum": 10000}
+        },
+        "required": ["unit_price_minor", "quantity"],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "total_minor": {"type": "integer", "minimum": 0, "maximum": 10000000000000}
+        },
+        "required": ["total_minor"],
+        "additionalProperties": false
+      },
+      "tests": [
+        {"input": {"unit_price_minor": 1234, "quantity": 2}, "expected": {"total_minor": 2468}},
+        {"input": {"unit_price_minor": 1234, "quantity": 0}, "expected": {"total_minor": 0}}
+      ]
+    }
+  ]
+}

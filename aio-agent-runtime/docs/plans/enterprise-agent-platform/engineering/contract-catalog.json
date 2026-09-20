@@ -1,0 +1,880 @@
+{
+  "schema_version": 1,
+  "status": "proposed_contracts_not_implemented",
+  "invariants": [
+    {
+      "id": "INV-01",
+      "requirement": "用户身份只来自验证过的登录/服务主体",
+      "counterexample": "body.user_id 被当真实调用者",
+      "task_reference_text": "IAM-01/02/04",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-02",
+      "requirement": "每次资源访问同时满足 Org、动作、资源和当前主体授权",
+      "counterexample": "知道 UUID 就能下载",
+      "task_reference_text": "IAM-05/06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-03",
+      "requirement": "租户 FK、查询/事务上下文一致，连接回池不残留身份",
+      "counterexample": "A 的连接被 B 复用仍带 org A",
+      "task_reference_text": "DAT-02/06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-04",
+      "requirement": "权限清单是调用上限，当前撤权/禁用仍要生效",
+      "counterexample": "旧 Manifest 永久授权",
+      "task_reference_text": "IAM-08/CAP-02",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-05",
+      "requirement": "Secret 不进入用户代码通用环境、业务日志或普通响应",
+      "counterexample": "全公司 Key 放入共享 .env",
+      "task_reference_text": "IAM-07/SBX-12",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-06",
+      "requirement": "不可信代码/文件解析/stdio 进程不在控制服务执行",
+      "counterexample": "管理员测试按钮直接 subprocess",
+      "task_reference_text": "CAP-07/SBX-04",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-07",
+      "requirement": "控制/管理事实由可信边界核对，非由沙箱自报",
+      "counterexample": "代码打印 destroyed:true 即释放资源",
+      "task_reference_text": "SBX-02/11",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-08",
+      "requirement": "跨用户及不同权限 cell 的文件/进程/Secret/网络隔离",
+      "counterexample": "同 Run 的计算脚本读连接器管理员 Token",
+      "task_reference_text": "SBX-05/12/MCP-05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-09",
+      "requirement": "总 CPU/内存/PID/磁盘/inode/时间/输出都受真实限制",
+      "counterexample": "named volume 无限写，仅每晚清理",
+      "task_reference_text": "SBX-07",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-10",
+      "requirement": "网络默认拒绝，批准出口不包含管理面/其他用户 cell",
+      "counterexample": "internal 网络中的 Harness 可被代码任意访问",
+      "task_reference_text": "SBX-08",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-11",
+      "requirement": "Run/Job/输入消息/初始事件/预算一起可靠创建",
+      "counterexample": "返回 run_id 但队列或预算没提交",
+      "task_reference_text": "RUN-02/10",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-12",
+      "requirement": "相同幂等业务动作重复提交不会产生第二份效果",
+      "counterexample": "HTTP 超时后当新任务再次写入",
+      "task_reference_text": "RUN-02/MCP-06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-13",
+      "requirement": "旧 generation 不能执行新命令、发布、提交新业务事件",
+      "counterexample": "旧 Worker 恢复后覆盖新工作区",
+      "task_reference_text": "RUN-03/SBX-09",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-14",
+      "requirement": "未决/未知副作用有显式阻断与核对，不能伪装已失败",
+      "counterexample": "outcome_unknown 被直接入重试队列",
+      "task_reference_text": "RUN-09",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-15",
+      "requirement": "审批绑定不可变参数、输入、代码、身份与有效期",
+      "counterexample": "批准后更改脚本再执行",
+      "task_reference_text": "RUN-08/CAP-05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-16",
+      "requirement": "数据库事务不跨模型/HTTP/容器/用户等待",
+      "counterexample": "一边持行锁一边等 5 分钟审批",
+      "task_reference_text": "DAT-06/RUN-08",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-17",
+      "requirement": "事件持久化、顺序和重复语义可恢复",
+      "counterexample": "SSE 随机推送但重连丢终态",
+      "task_reference_text": "RUN-04/05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-18",
+      "requirement": "成功必须有可靠结果/产物/用量状态，清理单独核对",
+      "counterexample": "文本生成完但上传失败仍显示成功",
+      "task_reference_text": "RUN-07/SBX-10",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-19",
+      "requirement": "输入/工作副本固定版本，发布校验期望 head 和写租约",
+      "counterexample": "两个 Run 直接编辑同一共享目录",
+      "task_reference_text": "SBX-09",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-20",
+      "requirement": "用户内容不能通过包/路径/压缩/预览获得额外执行能力",
+      "counterexample": "zip slip 或同域 HTML 窃取会话",
+      "task_reference_text": "CAP-03/UI-05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-21",
+      "requirement": "工具/模板/代码版本固定，依赖关系和权限可审计",
+      "counterexample": "发布新 Skill 悄悄改变活跃任务脚本",
+      "task_reference_text": "CAP-04/05/06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-22",
+      "requirement": "MCP 外部身份与连接池按实际权限主体分区",
+      "counterexample": "同 endpoint 共享 Bearer/Cookie",
+      "task_reference_text": "MCP-02/03",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-23",
+      "requirement": "文档 ACL 在召回/重排/入模前生效，引用再检查",
+      "counterexample": "先给模型全文再删未授权引用",
+      "task_reference_text": "KB-05/06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-24",
+      "requirement": "删除/撤权和来源限制传播到派生数据、缓存、恢复",
+      "counterexample": "受限文档生成报告后自动公开",
+      "task_reference_text": "KB-07/GOV-06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-25",
+      "requirement": "预算并发可预留、费用可核对，unknown 不作免费",
+      "counterexample": "流断开就丢掉已花费用",
+      "task_reference_text": "RUN-10/GOV-03",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-26",
+      "requirement": "高风险副作用之前有可靠授权/审批/意图审计",
+      "counterexample": "先执行，稍后日志失败当没发生",
+      "task_reference_text": "GOV-02/MCP-06",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-27",
+      "requirement": "支持访问限时限字段、访问本身有审计",
+      "counterexample": "运维能默认打开全部聊天与 Cookie",
+      "task_reference_text": "IAM-09/GOV-05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-28",
+      "requirement": "production 依赖或策略不满足时拒绝，不降级到共享宿主",
+      "counterexample": "manager 故障就本机运行 Python",
+      "task_reference_text": "FND-05/OPS-02",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-29",
+      "requirement": "备份/灰度/回滚不丢新事实、不复活已撤权内容",
+      "counterexample": "恢复旧 DB 抹掉新账本/离职状态",
+      "task_reference_text": "OPS-03/REL-05",
+      "source_ref": "01-decisions-and-invariants.md"
+    },
+    {
+      "id": "INV-30",
+      "requirement": "每项放行有固定版本/环境/范围证据，未测不声明安全",
+      "counterexample": "仅规划文档完成就把任务标上线",
+      "task_reference_text": "REL-02/06",
+      "source_ref": "01-decisions-and-invariants.md"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "TX-01",
+      "title": "原子创建 Run",
+      "source_ref": "03-database-transactions.md#tx-01"
+    },
+    {
+      "id": "TX-02",
+      "title": "领取 Job 与 execution_generation",
+      "source_ref": "03-database-transactions.md#tx-02"
+    },
+    {
+      "id": "TX-03",
+      "title": "计划工具与审批请求",
+      "source_ref": "03-database-transactions.md#tx-03"
+    },
+    {
+      "id": "TX-04",
+      "title": "审批决定",
+      "source_ref": "03-database-transactions.md#tx-04"
+    },
+    {
+      "id": "TX-05",
+      "title": "派发前最终授权与稳定操作键",
+      "source_ref": "03-database-transactions.md#tx-05"
+    },
+    {
+      "id": "TX-06",
+      "title": "记录工具结果和 checkpoint",
+      "source_ref": "03-database-transactions.md#tx-06"
+    },
+    {
+      "id": "TX-07",
+      "title": "取消与创建待核对阻断",
+      "source_ref": "03-database-transactions.md#tx-07"
+    },
+    {
+      "id": "TX-08",
+      "title": "发布 Artifact 与 WorkspaceVersion",
+      "source_ref": "03-database-transactions.md#tx-08"
+    },
+    {
+      "id": "TX-09",
+      "title": "用量记账、预留结算与调整",
+      "source_ref": "03-database-transactions.md#tx-09"
+    },
+    {
+      "id": "TX-10",
+      "title": "权限/文档删除和不可复活发布",
+      "source_ref": "03-database-transactions.md#tx-10"
+    }
+  ],
+  "fault_windows": [
+    {
+      "id": "FP-01",
+      "location": "TX-01 提交前",
+      "recovery_basis": "没有新 Run，按幂等键重试纯提交",
+      "forbidden_action": "预先执行工具"
+    },
+    {
+      "id": "FP-02",
+      "location": "Run 已提交、202 未送达",
+      "recovery_basis": "按同 key 查原 Run",
+      "forbidden_action": "换 key 重建"
+    },
+    {
+      "id": "FP-03",
+      "location": "领取 lease 后、创建 cell 前",
+      "recovery_basis": "新代次/manager 幂等查询",
+      "forbidden_action": "直接在控制机执行"
+    },
+    {
+      "id": "FP-04",
+      "location": "cell 已创建、manager 回复丢失",
+      "recovery_basis": "run/generation/slot 找原实例",
+      "forbidden_action": "重复建无法追踪实例"
+    },
+    {
+      "id": "FP-05",
+      "location": "模型部分输出、完整回合未存",
+      "recovery_basis": "partial + unknown usage，安全新尝试明确标记",
+      "forbidden_action": "拼接成假完成回合"
+    },
+    {
+      "id": "FP-06",
+      "location": "审批 pending 时 Worker 退出",
+      "recovery_basis": "PG ActionSpec/checkpoint",
+      "forbidden_action": "自动批准或丢掉待办"
+    },
+    {
+      "id": "FP-07",
+      "location": "approved 后脚本/输入/连接改变",
+      "recovery_basis": "摘要和当前版本不符→失效",
+      "forbidden_action": "沿用旧批准"
+    },
+    {
+      "id": "FP-08",
+      "location": "dispatching 后未知是否发出",
+      "recovery_basis": "接收方去重/查询或人工核对",
+      "forbidden_action": "自动产生新业务键重发"
+    },
+    {
+      "id": "FP-09",
+      "location": "下游成功、回复/结果落盘失败",
+      "recovery_basis": "稳定 key/下游记录核对",
+      "forbidden_action": "按普通网络失败重试"
+    },
+    {
+      "id": "FP-10",
+      "location": "结果已存、游标事务未提交",
+      "recovery_basis": "唯一调用记录/同 TX 检查",
+      "forbidden_action": "再次产生副作用"
+    },
+    {
+      "id": "FP-11",
+      "location": "候选文件上传、发布事务失败",
+      "recovery_basis": "候选仍不公开，重试发布/CAS",
+      "forbidden_action": "直接返回全桶链接"
+    },
+    {
+      "id": "FP-12",
+      "location": "Run 终态、清理消息丢失",
+      "recovery_basis": "DB+runtime Reaper 对账",
+      "forbidden_action": "把未销毁资源回池"
+    }
+  ],
+  "engineering_cases": [
+    {
+      "id": "ECASE-01",
+      "title": "并发同幂等键只创建一个 Run",
+      "reference_text": "RUN-02.02/04、INV-11/12；原 RUNTEST-01/02。",
+      "given": "FX-ID/PG/RUN，同 Alice、Session revision=8、余额充足、相同 key/body。",
+      "when": "两个独立数据库连接在 TX-01 幂等行处 barrier 后同时提交；再用同 key 不同 message 请求。",
+      "then": "同体返回同 run_id；runs/jobs/initial user message/reservation 各一份；session revision=9；异体 409，行数不变。",
+      "evidence": "事务结果、唯一索引、行数、响应；不得只断言 HTTP 202。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-01",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-02",
+      "title": "提交后丢响应不重建任务",
+      "reference_text": "RUN-02.05、INV-11/12；原 RUNTEST-06。",
+      "given": "FX-PG/RUN；故障 FP-02。",
+      "when": "TX-01 commit 成功后断开 HTTP 回复，客户端用原 key/body 重试。",
+      "then": "找回原 run_id；没有第二条 Job、消息或预算；之后 Worker 只领取该逻辑任务。",
+      "evidence": "commit 时间、两请求关联 ID、数据行/派发计数。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-02",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-03",
+      "title": "Session 与预算竞争原子拒绝",
+      "reference_text": "RUN-02.03/04、RUN-10.02、INV-11/25；原 RUNTEST-03、GOVTEST-01。",
+      "given": "同 Session 两个不同 key，请求各需最后一份可用预算。",
+      "when": "事务同步竞争 Session/预算锁；另测 Session 不同但预算相同。",
+      "then": "同 Session 最多一 unresolved Run；同预算不会两次预留；失败事务不留 user message/job/部分 reservation。",
+      "evidence": "预算前后金额、行计数、唯一冲突/retryable 错误。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-03",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-04",
+      "title": "租约接管后旧 Worker 不能推进",
+      "reference_text": "RUN-03.04、SBX-02.05、INV-13；原 RUNTEST-04/05。",
+      "given": "Worker A 持 generation=1；测试时钟让 lease 到期，B 接管 generation=2。",
+      "when": "恢复 A，尝试 exec、append business event、publish workspace；B 执行合法动作。",
+      "then": "A 的新动作全部拒绝；B 正常；旧结果只能作为隔离核对证据，不改变 B 游标。",
+      "evidence": "所有边界收到的 generation、拒绝原因与有效 lease 唯一性。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-04",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-05",
+      "title": "纯 DB 事务重试不夹带外部 IO",
+      "reference_text": "DAT-06、RUN-03/10、INV-16/12。",
+      "given": "FX-PG/RUN/SINK，明确事务函数与外部 dispatcher 边界。",
+      "when": "注入 deadlock/serialization 类暂时性错误，让纯 DB 事务重试；监视 HTTP/模型/runtime adapter 调用。",
+      "then": "事务重试期间外部调用计数为 0；最多重试批准次数；事务成功后一个逻辑派发，不在 retry wrapper 内重复副作用。",
+      "evidence": "锁顺序、错误/重试次数、adapter spy；锁超时不解除唯一约束。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-05",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-06",
+      "title": "审批并发决定只有一个生效",
+      "reference_text": "RUN-08.03、INV-15；原 RUNTEST-10/12。",
+      "given": "FX-ID/PG，pending Approval revision=3，两个合法请求一个 approve 一个 reject。",
+      "when": "在 CAS 前 barrier 同时提交，再重传胜出决定。",
+      "then": "仅一个 terminal decision；冲突 409；同决定重传返回同事实；审计保留实际决定者。",
+      "evidence": "Approval revision、audit、Invocation 后续状态，非授权审批人始终拒绝。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-06",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-07",
+      "title": "审批后替换内容被阻止",
+      "reference_text": "RUN-08.01/04、CAP-05、INV-15/21；原 RUNTEST-11。",
+      "given": "已批准脚本/输入/工具/连接 revision 的 ActionSpec。",
+      "when": "分别替换脚本字节、输入对象、依赖版本、参数、连接身份；尝试用旧批准执行。",
+      "then": "ACTION_CHANGED/invalidated；FX-SINK effect_count=0；不得仅重新 hash 后覆盖原 ActionSpec。",
+      "evidence": "旧/新 digest、拒绝原因；每种变更独立用例，不只测参数字符串。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-07",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-08",
+      "title": "待审批重启且进程状态丢失",
+      "reference_text": "RUN-07.05、RUN-08.05、INV-14/15；原 RUNTEST-09。",
+      "given": "pending Approval 和 checkpoint 已存；分别建立 reconstructible 与 process_state_dependent 两类动作。",
+      "when": "重启 Worker 并销毁旧 cell，用户批准原动作。",
+      "then": "可重建且摘要/权限仍有效的动作按新绑定恢复；不可重建者执行许可失效并明确核对/失败，不凭旧 Future 继续。",
+      "evidence": "checkpoint、restartability、cell 绑定、审批事实和实际 dispatch_count。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-08",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-09",
+      "title": "prepared 与 dispatching 中断语义不同",
+      "reference_text": "RUN-09、MCP-06.03/04、INV-12/14/26。",
+      "given": "FX-SINK；分别停在 prepared commit 后和 dispatching commit 后。",
+      "when": "进程退出后恢复。",
+      "then": "prepared 且契约证明未发送可继续同逻辑动作；dispatching 不知道是否已发必须查询/去重或 unknown，不盲换新业务键。",
+      "evidence": "状态时间线、网络 spy、operation_key；不以异常名字推断 not_sent。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-09",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-10",
+      "title": "下游已成功但回复丢失",
+      "reference_text": "MCP-06、RUN-09.04、INV-12/14；原 MCPTEST-11、RUNTEST-14。",
+      "given": "FX-SINK 收到操作后 effect_count=1，但主动丢弃响应。",
+      "when": "dispatcher timeout、Worker 重启、客户端点 retry。",
+      "then": "支持幂等/查询时确认原结果，effect_count 仍为 1；无可核对能力时 recovery_required，普通 retry 被拒。",
+      "evidence": "request_count 可大于 1，但同业务 key effect_count=1；不支持幂等分支不自动重发。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-10",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-11",
+      "title": "旧代次迟到结果不污染新游标",
+      "reference_text": "RUN-03/07、GOV-03、INV-13/25。",
+      "given": "旧 dispatch 已获准并可能收费，generation 已更新；延迟结果随后返回。",
+      "when": "旧 Worker 尝试提交 result/usage/next cursor。",
+      "then": "不能推进新游标；可由受限 reconciler 去重保存该旧 dispatch 的费用/下游确认事实，不能简单丢实际账单。",
+      "evidence": "业务状态不变、隔离证据与 ledger 仅一次，无新工具调用。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-11",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-12",
+      "title": "取消未知写时保留阻断但释放计算",
+      "reference_text": "RUN-09、SBX-11、INV-14/18；原 RUNTEST-15。",
+      "given": "一个外部写效果未知的 Run，占 Session/project 写范围并有 compute cell。",
+      "when": "用户取消、manager 确认 cell 销毁，再向相同 Session/受影响业务范围提交写任务。",
+      "then": "Run 为 recovery_required，计算配额释放但 durable blocker 生效，新写被拒；核对后显式解除，不自动重跑旧任务。",
+      "evidence": "runtime resources=0、blocker 未解除、Session 槽/新请求错误、核对审计。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-12",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-13",
+      "title": "产物上传成功但发布失败",
+      "reference_text": "SBX-10、RUN-07、INV-18/19；原 RUNTEST-16。",
+      "given": "FX-OBJ 已有 candidate；在 TX-08 head CAS/DB commit 处注入失败。",
+      "when": "用户查询 Run/文件/下载，随后安全重试发布。",
+      "then": "第一次不是 succeeded，candidate 不公开；重试仍校验权限/head，只发布一次；孤儿按明确策略清理。",
+      "evidence": "对象 key/scan 状态、Artifact 记录/ACL、workspace head、下载拒绝。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-13",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-14",
+      "title": "恢复使用已提交逻辑调用而非重问模型",
+      "reference_text": "RUN-07.02/03/04、INV-12/17；原 RUNTEST-14/17。",
+      "given": "fake model 一完整回合含两工具，第一个结果提交后在游标边界故障。",
+      "when": "恢复最新 checkpoint；fake model spy 会在重问时生成不同参数以暴露错误实现。",
+      "then": "已确认调用不重发，下一调用使用原已提交参数；不能从原 prompt 重跑所有步骤。",
+      "evidence": "model call count、logical_call IDs、下游 effect count、游标和事件序号。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-14",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-15",
+      "title": "连接池在异常后不串组织",
+      "reference_text": "DAT-06、IAM-06、INV-02/03；原 AUTH-07/08。",
+      "given": "FX-PG pool_size=1，Alice 和 Org-B 用户各有 marker 行。",
+      "when": "A 事务设置 org 后异常/取消/rollback，B 借同连接查询；另测无上下文事务。",
+      "then": "B 只见 B，空上下文不见业务行；跨 org 写 FK/RLS 拒绝。",
+      "evidence": "连接复用 ID、事务本地设置和实际结果，不只 mock Repository。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-15",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-16",
+      "title": "GUC RLS 的威胁边界负控制",
+      "reference_text": "IAM-06、INV-03/30。",
+      "given": "隔离 FX-PG 使用基于 trusted app.org_id 的 RLS，无真实数据。",
+      "when": "分别验证普通 API 不能设身份/执行任意 SQL；由测试管理员模拟“应用 DB 凭据失陷”直接设置另一 org 上下文。",
+      "then": "API 路径必须拒绝伪造；测试记录 GUC 模式可能允许持该数据库角色的人改变上下文，不把此模式宣称为抵御任意 SQL 的安全隔离。",
+      "evidence": "数据库角色/策略、API 拒绝、明确剩余风险；若业务要求抵御凭据失陷则该架构 no-go 或采用更强数据域。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-16",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-17",
+      "title": "Logout 与离职撤权区别",
+      "reference_text": "IAM-02/03/08、INV-01/04。",
+      "given": "Alice 有运行中的授权 Run 和浏览器会话。",
+      "when": "普通 logout 后观察后台，再将成员标停用并提交。",
+      "then": "logout 关闭浏览器访问但按批准默认 Run 可继续；停用后新工具/模型授权拒绝并触发停止/核对；不能因 Cookie 到期永久授权或误取消所有后台工作。",
+      "evidence": "auth_session、membership revision、Run delegation、实际后续调用。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-17",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-18",
+      "title": "撤权后不能靠旧幂等键读取结果",
+      "reference_text": "IAM-08、RUN-02、INV-02/04/12；原 AUTH-09。",
+      "given": "Alice 曾创建成功 Run，保存 key；资源或成员权限随后撤销。",
+      "when": "用旧 key/body 重放 POST、读 status/events/download。",
+      "then": "先当前授权再幂等结果返回；所有敏感读取拒绝，不因历史请求成功而泄露正文。",
+      "evidence": "决策时间/撤权 commit 顺序、响应 payload 无 marker。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-18",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-19",
+      "title": "SSE 历史/实时交界无丢失且有界",
+      "reference_text": "RUN-04/05、UI-04、INV-17；原 RUNTEST-07/08。",
+      "given": "已有 seq 1..20，客户端 after=10，通知服务可丢消息。",
+      "when": "在历史读取与订阅注册间提交 seq21，重复投递 seq20，并让客户端短暂慢读；之后用原游标重连。",
+      "then": "最终获权事件 11..21 各呈现一次；PG 轮询补通知缺口；缓冲超限可断开但不能丢终态或重跑任务。",
+      "evidence": "DB seq、发送/呈现列表、最大缓冲、model/dispatch count 不增加。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-19",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-20",
+      "title": "stdout 不能伪造管理事件",
+      "reference_text": "SBX-04、INV-06/07；原 SBXTEST-04/08。",
+      "given": "FX-CELL 代码只打印看起来像 approval/lease/destroyed 的 JSON/事件文本。",
+      "when": "文本经 stdout/stderr 返回。",
+      "then": "它只出现在不可信 output 数据中，不能改变 Approval/Run/lease/配额或触发工具；外部 manager 核实的状态保持真实。",
+      "evidence": "控制通道与数据输出 schema、数据库前后状态和资源清单。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-20",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-21",
+      "title": "创建 cell 后丢回复仍能幂等找回",
+      "reference_text": "SBX-02/11、INV-07/13；原 SBXTEST-18。",
+      "given": "ensure_target 的固定 org/run/generation/slot/profile；运行时创建已完成。",
+      "when": "丢 manager 回复并重传；再用同键不同镜像/输入摘要请求。",
+      "then": "同 spec 返回同 backend ID，一份容量预留；异 spec 冲突拒绝；终结后一个资源被准确清理。",
+      "evidence": "runtime create count、resource IDs、reservations 和实际卷/网络数量。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-21",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-22",
+      "title": "任意计算代码看不到连接器凭据",
+      "reference_text": "SBX-12、MCP-05、INV-05/08/22。",
+      "given": "FX-CELL 中 compute 与 credentialed connector 独立权限域，Secret 仅为合成 marker。",
+      "when": "计算代码尝试通过共享文件、env、进程/IPC/网络路径读取 marker 或绕过 Gateway 调业务 endpoint。",
+      "then": "不可读/不可直连；合法获权 MCP 调用可完成；如果选择同域导致可读取，测试明确判该 profile 不满足强审批边界。",
+      "evidence": "mount/network/UID/PID 配置、marker 不出现、Gateway 与 FX-SINK 计数。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-22",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-23",
+      "title": "字节与 inode 硬配额不是清理脚本",
+      "reference_text": "SBX-07、INV-09；原 SBXTEST-09。",
+      "given": "专用节点小容量测试卷、独立 inode 上限与宿主保护水位。",
+      "when": "用有外层上限的受控写入分别逼近 bytes/inodes 限制，观测 HOME/tmp/output/日志所有可写路径。",
+      "then": "每路径都受有效配额；超限只失败当前 target，控制面/另用户仍可用；named volume 若无硬限制不能标通过。",
+      "evidence": "实际 quota/cgroup 配置、使用曲线、异常码、宿主余量；禁止真实共享盘耗尽。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-23",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-24",
+      "title": "重定向/DNS/IPv6 不绕过出口",
+      "reference_text": "SBX-08、MCP-04、INV-10；原 SBXTEST-14/15。",
+      "given": "模拟 resolver/proxy 和受控地址目标，允许 endpoint 会重定向到拒绝网段。",
+      "when": "测试初次 DNS、重绑定、IPv6/映射地址、直连忽略 proxy env、MCP metadata/resource link。",
+      "then": "实际连接处拒绝不允许目标；不访问生产管理网/metadata；合法目标仍按明确范围通过。",
+      "evidence": "代理与节点层流量记录、DNS 决策、connection attempts，不能只看 URL 检查函数。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-24",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-25",
+      "title": "内部 runner 故障不能假释放资源",
+      "reference_text": "SBX-04/11、INV-07/09；原 SBXTEST-10/19。",
+      "given": "FX-CELL 有受控短期子进程，runner 提前退出/错误声称已停止，外部 runtime 仍可见资源。",
+      "when": "cancel/destroy 发生，manager 核对真实进程树。",
+      "then": "未核实前不标 destroyed、不释放节点容量、不回池；确认全树停止后才清理计数；失败隔离节点。",
+      "evidence": "外部 runtime 资源快照、cleanup state、capacity ledger 和告警。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-25",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-26",
+      "title": "归档与产物的链接竞争",
+      "reference_text": "CAP-03、SBX-10、INV-19/20；原 SBXTEST-11/12/13。",
+      "given": "仅测试目录中的绝对/越界/链接/特殊文件归档和一个可控替换链接的 writer。",
+      "when": "扫描/收集在校验与读取之间遭遇替换；另测压缩比/文件数上限。",
+      "then": "不读写保护目录、不发布逃逸对象；writer 先停止或安全文件句柄阻止 race；异常有界。",
+      "evidence": "保护文件 hash、collector 读取目标、拒绝原因和产物集合。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-26",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-27",
+      "title": "旧 writer 不能覆盖新 Workspace head",
+      "reference_text": "SBX-09/10、INV-13/19；原 SBXTEST-17。",
+      "given": "A 基于 head V1，lease 失效；B 获新 lease 发布 V2。",
+      "when": "恢复 A 并用旧 base/generation 发布自己的 candidate。",
+      "then": "A CAS/lease 校验失败，head 保持 V2；候选不公开覆盖，B 结果与配额正确。",
+      "evidence": "writer lease、version lineage、Artifact 可见性和 revision。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-27",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-28",
+      "title": "受限来源不能通过新报告洗掉权限",
+      "reference_text": "GOV-01/06、SBX-10、INV-24；原 GOVTEST-11。",
+      "given": "Carol 同时可见销售/财务资料，报告来源含两者；Alice 只可见销售。",
+      "when": "Carol 试图把报告分享给 Alice/全部门，模型同时声称“已脱敏”。",
+      "then": "未有批准解除限制时拒绝扩大分享；自己的获权读取正常；产物/摘要保留来源策略。",
+      "evidence": "source refs、derived policy、grant 决策、下游下载不含财务 marker。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-28",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-29",
+      "title": "删除与旧索引 Job 发布竞争",
+      "reference_text": "KB-02/07、INV-24；原 KBTEST-09/14。",
+      "given": "document epoch=7，旧 Job 已完成 embedding 尚未 publish。",
+      "when": "删除事务提交 epoch=8，再允许旧 Job 发布；重放重复完成通知。",
+      "then": "文档不回 ready，检索/引用拒绝，候选索引待清理；重复通知不降低 epoch。",
+      "evidence": "PG document/job/index 状态和模型/检索 spy 无 marker。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-29",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-30",
+      "title": "未授权最相似文档不进入重排/模型",
+      "reference_text": "KB-05/06、INV-23；原 KBTEST-03/04/05/13。",
+      "given": "未授权财务文档与查询向量最相似，授权销售文档相似度较低；模型/reranker spy 记录输入。",
+      "when": "Alice 做向量+关键词检索并读取引用，重复相同查询测试缓存。",
+      "then": "只有获权内容进入应用结果/重排/模型/缓存；低召回可以明确无答案，不能放宽 ACL；猜未授权 citation ID 仍拒绝。",
+      "evidence": "实际 SQL 授权过滤、候选/spy/日志 marker 检查、返回引用集合。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-30",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-31",
+      "title": "远端 schema/风险变化不能自动扩权",
+      "reference_text": "CAP-02、MCP-04、INV-04/21/22；原 MCPTEST-05/06。",
+      "given": "批准的只读工具版本；远端下一次 discovery 新增写工具或改变已有 schema 并标 readOnly=true。",
+      "when": "客户端刷新目录，模型试图调用新动作。",
+      "then": "变化进入待审核，新能力不加入有效 Manifest；平台风险不被远端注解覆盖。",
+      "evidence": "旧/新 schema digest、alias 映射、Gateway deny、FX-SINK effect_count=0。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-31",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-32",
+      "title": "凭据刷新晚于撤销不能复活连接",
+      "reference_text": "MCP-02/03、IAM-07/08、INV-04/05/22；原 MCPTEST-03/10。",
+      "given": "connection revision=4，refresh 请求被延迟。",
+      "when": "用户撤销 revision=5 并关闭池，然后返回旧 refresh 成功结果；再尝试调用。",
+      "then": "旧结果 CAS 不可覆盖撤销；Token 不重新启用、池不复活；新调用拒绝。",
+      "evidence": "Secret binding revision/connection state、refresh lock、pool 数量和审计。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-32",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-33",
+      "title": "诊断和错误不泄漏 Secret/越权正文",
+      "reference_text": "IAM-07、GOV-02/05、INV-05/27；原 GOVTEST-04/07。",
+      "given": "合成 Secret marker 分别嵌在 header/query/env/嵌套异常/工具结果，Operator 默认无正文 grant。",
+      "when": "触发失败、SSE error、审计查询、诊断包导出；再授予限定字段/时间 grant。",
+      "then": "无 grant 只见元数据；有 grant 也不输出 Secret；到期停止新读，访问自身有审计。",
+      "evidence": "各出口内容检查/权限日志，图片/截图按内容权限处理而非宣称正则已脱敏。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-33",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-34",
+      "title": "审计事实不可写时不产生高风险效果",
+      "reference_text": "GOV-02、MCP-06、INV-26；原 GOVTEST-05。",
+      "given": "已获准写请求，分别让 PG 意图写失败、外部日志归档失败。",
+      "when": "尝试派发。",
+      "then": "PG 意图失败时 dispatch/effect_count=0；仅外部归档失败但 PG/Outbox 可靠时按策略继续且有告警，不混淆两种故障。",
+      "evidence": "事务 rollback、Outbox backlog、adapter spy 和明确错误。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-34",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-35",
+      "title": "未知费用、重复账单和超预留调整",
+      "reference_text": "RUN-10、GOV-03、INV-25；原 GOVTEST-01/02。",
+      "given": "模型部分输出断开无 usage，保守预留未释放；稍后账单实际金额超过估计。",
+      "when": "重复送同 provider request 的 usage，再送受控调整记录。",
+      "then": "unknown 不记免费；同事实只入账一次；调整追加并形成 overage/debt，阻止新超额调用但不丢真实账单。",
+      "evidence": "Ledger 唯一键、原预留/结算/调整、currency/price_version 与 UI 标记。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-35",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-36",
+      "title": "恢复旧备份不会复活已撤权数据",
+      "reference_text": "OPS-03、KB-07、GOV-06、INV-29；原 OPSTEST-06、GOVTEST-10。",
+      "given": "旧备份含 active 用户和文档，权威后续 tombstone/离职/禁用日志在独立受控来源。",
+      "when": "恢复到无出网无自动 Worker 的环境，再同步当前撤权；另测无法取得当前事实。",
+      "then": "已撤权内容不开放，旧 active Run 不自动执行；无法确认时服务/受影响资源保持隔离。",
+      "evidence": "恢复点、删除/身份重放、ACL 查询、dispatch_count=0、实际 RPO/RTO。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-36",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-37",
+      "title": "不兼容 checkpoint 不自动从头执行",
+      "reference_text": "RUN-06/07、OPS-07、INV-14/21/29。",
+      "given": "checkpoint schema 来自不支持的引擎/版本，历史含已发生的写调用。",
+      "when": "新/旧 Worker 尝试接管。",
+      "then": "明确 unsupported/recovery_required，保持旧事实与 blocker；不能丢 checkpoint 从最初消息重跑。",
+      "evidence": "兼容矩阵、错误、历史 effect_count 不增加。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-37",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-38",
+      "title": "切换用户后的迟到响应不可显示",
+      "reference_text": "UI-02/03/04、INV-01/02；原 UITEST-01。",
+      "given": "Alice 的请求被延迟，浏览器 logout 后登录 Bob；同样测试项目切换。",
+      "when": "释放 Alice 旧响应/旧 SSE 帧到前端。",
+      "then": "client_context/view epoch 不匹配而丢弃，不写 Bob 缓存/DOM；后端旧订阅也停止新增获权读取。",
+      "evidence": "两个上下文的请求/缓存/DOM marker；不是只断言 AbortController 调过。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-38",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-39",
+      "title": "生产缺依赖不能降到共享宿主",
+      "reference_text": "FND-05、OPS-02、CAP-07、INV-06/28；原 OPSTEST-01。",
+      "given": "production 模式分别缺 SSO/安全 profile/manager/正确 DB role/Secret resolver。",
+      "when": "启动或提交任务，并直接请求旧 chat/file/WS/MCP 调试路径。",
+      "then": "启动拒绝或对应能力关闭；无控制侧 subprocess/旧全局 Token 放行；原端口关闭或受相同授权。",
+      "evidence": "启动诊断、路由/网络探测、adapter spy，错误不输出密钥配置。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-39",
+      "execution_status": "not_run",
+      "actual_result": null
+    },
+    {
+      "id": "ECASE-40",
+      "title": "模型配置在旧 Shell 解析前被拒绝",
+      "reference_text": "IAM-07.04、GOV-07.02、INV-05/06/28；原 MCPTEST-12。",
+      "given": "production 用户配置包含 `apiKey` 的命令形式或未批准 base URL；subprocess/网络调用用 spy 而非执行。",
+      "when": "创建/读取模型配置、初始化 ModelService、测试连接。",
+      "then": "配置校验先拒绝；subprocess 和未批准 endpoint 调用计数均为 0；不能执行后再报不安全。",
+      "evidence": "构造/校验调用顺序、spy、错误和审计；legacy-local 的明确兼容分支单独测试不进入生产。",
+      "source_ref": "08-test-fixtures-and-fault-cases.md#ecase-40",
+      "execution_status": "not_run",
+      "actual_result": null
+    }
+  ],
+  "evidence_profiles": {
+    "EP-DESIGN": [
+      "decision_record",
+      "alternatives_and_risks",
+      "approved_scope_and_owner",
+      "planned_positive_negative_cases"
+    ],
+    "EP-DATA": [
+      "migration_or_transaction_contract",
+      "role_and_constraint_evidence",
+      "old_new_fixture_validation",
+      "rollback_or_forward_fix_plan"
+    ],
+    "EP-SERVICE": [
+      "api_schema_or_service_signature",
+      "authorization_and_failure_tests",
+      "concurrency_or_idempotency_tests_if_applicable",
+      "compatibility_and_safe_disable_plan"
+    ],
+    "EP-RUNTIME": [
+      "actual_environment_and_image_digest",
+      "isolation_and_hard_limit_tests",
+      "process_tree_and_resource_reconciliation",
+      "network_secret_boundary_evidence"
+    ],
+    "EP-INTEGRATION": [
+      "version_identity_and_data_contract",
+      "interop_and_revocation_tests",
+      "failure_and_side_effect_semantics",
+      "bounded_resource_and_safe_disable_evidence"
+    ],
+    "EP-UI": [
+      "generated_contract_alignment",
+      "identity_epoch_and_state_tests",
+      "browser_xss_accessibility_and_failure_evidence",
+      "no_frontend_authorization_bypass"
+    ],
+    "EP-VERIFY": [
+      "fixture_and_environment_version",
+      "deterministic_assertions_and_fault_points",
+      "actual_raw_results_with_fail_skip_separated",
+      "retest_and_residual_risk_record"
+    ],
+    "EP-OPERATE": [
+      "executed_runbook_timeline",
+      "precise_resource_scope_and_permissions",
+      "restore_rollback_and_reconciliation_results",
+      "responsible_operator_and_followup"
+    ],
+    "EP-RELEASE": [
+      "approved_release_scope_manifest",
+      "gate_evidence_links",
+      "stopping_and_rollback_authorization",
+      "oncall_and_business_handoff"
+    ]
+  }
+}

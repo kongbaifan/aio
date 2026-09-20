@@ -1,0 +1,13 @@
+{
+  "endpoints": [
+    {
+      "id": "company-readonly",
+      "url": "https://mcp.example.test/mcp",
+      "authentication": "bearer",
+      "read_tools": ["search_company_documents"],
+      "private_networks": [],
+      "denied_networks": [],
+      "timeout_seconds": 30
+    }
+  ]
+}

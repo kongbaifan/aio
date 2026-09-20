@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "analytics-python",
+  "python": "3.12",
+  "platform": "linux-x86_64",
+  "base_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254",
+  "recipe_sha256": "fcddb3fca1c93bf7044836e43775c1a1a4f3e85a8068ac6af969450459c15635",
+  "packages": [
+    {
+      "name": "numpy",
+      "version": "2.5.3",
+      "filename": "numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "b7e18c623bb5c95acb3b3328861272816ba199fb531921c5d6d0b675f1fde9e3",
+      "bytes": 16717410,
+      "imports": [
+        "numpy"
+      ]
+    },
+    {
+      "name": "pandas",
+      "version": "3.0.5",
+      "filename": "pandas-3.0.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "d373ce03ffd84010ed9839fa73672a9c8256990532e158440c0085db7d914b34",
+      "bytes": 10998091,
+      "imports": [
+        "pandas"
+      ]
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+      "bytes": 229892,
+      "imports": [
+        "dateutil"
+      ]
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "bytes": 11050,
+      "imports": [
+        "six"
+      ]
+    }
+  ],
+  "install_path": "/opt/aio-deps",
+  "network_profile": "none"
+}

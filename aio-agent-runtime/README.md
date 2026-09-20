@@ -2,6 +2,26 @@
 
 这是一个面向 AI Agent 的沙箱运行时项目。它把文件、代码、终端、浏览器、MCP 和业务 Skill 组织成可组合的执行能力。
 
+## 企业多用户改造（实施中，尚不可作为完整生产平台上线）
+
+现有单机工作台仍保持兼容。新平台已接通 SSO/部门权限、PostgreSQL 持久 Run、真实 Python 隔离执行、私有产物、Web 工作台/管理台、文本 Skill、只读 HTTP MCP/配置后的 OAuth、独立无网络 stdio MCP、隔离知识摄取/检索/引用，以及同一 Run 内的持久顺序 Team。安全审批边界的私有文件检查点交接也已实现。进程/内存与跨节点恢复、OCR/外部知识同步、stdio 受控联网/真实业务写、完整 Skill 生命周期、更多运行环境及生产 Gate 仍未完成。请先阅读 [实际实现与验证进度](docs/implementation/README.md)，不要把局部可用或本机测试通过当作全平台已完成。
+
+企业工作台的构建、首位管理员配置和本机合成身份预览见 [Web/部署说明](web/platform/README.md)；共享能力见 [Skill 契约](docs/engineering/platform-skill-contract.md)。下方旧 Harness 的本机启动方式不是企业多用户部署方案。
+
+MCP 的个人/部门连接、版本授权和部署边界见 [MCP 契约](docs/engineering/platform-mcp-contract.md)、[OAuth/刷新契约](docs/engineering/platform-mcp-oauth-contract.md)、[隔离 stdio 契约](docs/engineering/platform-mcp-stdio-contract.md) 与 [独立凭据网关](services/connector-gateway/README.md)。OAuth 使用预登记 client，不借用平台登录 token；stdio 按 Run/代次/连接隔离，不在 API/Worker/网关宿主执行第三方程序。
+
+stdio 已支持模板和本次任务双重授权后的显式附件副本（最多 32 个、4 MiB），默认不传文件；同进程复用不重新覆盖输入，不挂服务器目录或共享其他用户工作区。配置、来源和限制见 [附件输入契约](docs/engineering/platform-mcp-stdio-input-contract.md)。
+
+计算/Skill 已接入签名批准的固定依赖镜像：NumPy/Pandas 等包只在隔离 CI 中按 wheel 哈希锁安装，Run 共享只读镜像层而不共享可写环境。Skill v2 固定环境摘要和精确版本，缺包/签名不符不会回退宿主安装。操作员工作流与范围见 [依赖运行时契约](docs/engineering/platform-dependency-runtime-contract.md)。
+
+Skill 归档导入采用独立私有 quarantine 和有界扫描 cell，生成草稿后仍需原有隔离验证、双人审核与明确授权；不会把 ZIP/TAR 直接解压到服务器共享目录。格式、原生 SKILL.md 语义、配额和恢复规则见 [归档导入契约](docs/engineering/platform-skill-archive-contract.md)，当前验收状态见 [任务记录](docs/implementation/skill-archive-plan.md)。
+
+知识库的格式、当前权限、嵌入费用、引用和删除语义见 [知识库契约](docs/engineering/platform-knowledge-contract.md)；文档处理依赖 [独立解析器镜像](services/document-parser/README.md)，不会回退到 API/Worker 宿主解析。
+
+平台 Team 的版本级开关、步骤权限、统一预算、重启游标与文件交接边界见 [Team 契约](docs/engineering/platform-team-contract.md) 与 [工作区检查点](docs/engineering/platform-workspace-checkpoint-contract.md)。下方旧 Harness 的 team 说明不代替平台安全契约。
+
+组织 / 部门共享预算的固定计费归属、并发预留、未知费用和迁移规则见 [共享预算契约](docs/engineering/platform-shared-budget-contract.md)。它是个人 / Run 预算之外的附加上限，不是按部门各收一份钱。
+
 ## 项目定位
 
 ```text

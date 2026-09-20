@@ -1,0 +1,271 @@
+"""Schema snapshot v7: isolated document ingestion, ACL-bound retrieval/citations and embedding usage."""
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from pgvector.sqlalchemy import Vector
+from . import schema_v6 as v6
+
+metadata = MetaData(naming_convention=v6.metadata.naming_convention)
+for original in v6.metadata.tables.values():
+    original.to_metadata(metadata)
+for name, original in vars(v6).items():
+    if isinstance(original, Table):
+        globals()[name] = metadata.tables[original.name]
+
+for name in ("aio_runs", "aio_artifacts"):
+    metadata.tables[name].append_column(
+        Column("knowledge_source_refs", JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    )
+
+
+def base():
+    return [
+        Column("org_id", Uuid, nullable=False),
+        Column("id", Uuid, primary_key=True),
+        Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+        UniqueConstraint("org_id", "id"),
+    ]
+
+
+embedding_models = Table(
+    "aio_embedding_models",
+    metadata,
+    *base(),
+    Column("name", String(100), nullable=False),
+    Column("model", String(128), nullable=False),
+    Column("config", JSONB, nullable=False),
+    Column("digest", String(64), nullable=False),
+    ForeignKeyConstraint(["org_id", "id"], ["aio_resources.org_id", "aio_resources.id"]),
+)
+knowledge_bases = Table(
+    "aio_knowledge_bases",
+    metadata,
+    *base(),
+    Column("name", String(100), nullable=False),
+    Column("description", String(1000), nullable=False),
+    Column("embedding_model_id", Uuid),
+    Column("profile_id", String(64), nullable=False),
+    Column("image_digest", String(71), nullable=False),
+    Column("tool_id", Uuid, nullable=False),
+    Column("index_revision", Integer, nullable=False, server_default="0"),
+    Column("storage_limit_bytes", Integer, nullable=False, server_default="67108864"),
+    ForeignKeyConstraint(["org_id", "id"], ["aio_resources.org_id", "aio_resources.id"]),
+    ForeignKeyConstraint(["org_id", "embedding_model_id"], ["aio_embedding_models.org_id", "aio_embedding_models.id"]),
+    ForeignKeyConstraint(["org_id", "tool_id"], ["aio_tool_versions.org_id", "aio_tool_versions.id"]),
+)
+knowledge_documents = Table(
+    "aio_knowledge_documents",
+    metadata,
+    *base(),
+    Column("knowledge_id", Uuid, nullable=False),
+    Column("title", String(200), nullable=False),
+    Column("visibility", String(24), nullable=False, server_default="restricted"),
+    Column("state", String(24), nullable=False, server_default="active"),
+    Column("current_version_id", Uuid),
+    Column("next_version", Integer, nullable=False, server_default="0"),
+    ForeignKeyConstraint(["org_id", "id"], ["aio_resources.org_id", "aio_resources.id"]),
+    ForeignKeyConstraint(["org_id", "knowledge_id"], ["aio_knowledge_bases.org_id", "aio_knowledge_bases.id"]),
+    ForeignKeyConstraint(
+        ["org_id", "id", "current_version_id"],
+        ["aio_knowledge_versions.org_id", "aio_knowledge_versions.document_id", "aio_knowledge_versions.id"],
+        name="fk_aio_knowledge_document_version",
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+    ),
+    CheckConstraint("visibility IN ('restricted','inherited')", name="visibility"),
+    CheckConstraint("state IN ('active','deleting','deleted')", name="state"),
+)
+knowledge_versions = Table(
+    "aio_knowledge_versions",
+    metadata,
+    *base(),
+    Column("knowledge_id", Uuid, nullable=False),
+    Column("document_id", Uuid, nullable=False),
+    Column("number", Integer, nullable=False),
+    Column("filename", String(200), nullable=False),
+    Column("format", String(12), nullable=False),
+    Column("requested_by", Uuid, nullable=False),
+    Column("membership_revision", Integer, nullable=False),
+    Column("max_bytes", Integer, nullable=False),
+    Column("source_sha256", String(64)),
+    Column("source_bytes", Integer),
+    Column("storage_reserved_bytes", Integer, nullable=False),
+    Column("upload_state", String(24), nullable=False, server_default="pending"),
+    Column("state", String(24), nullable=False, server_default="uploading"),
+    Column("parser_version", String(64)),
+    Column("index_bytes", Integer, nullable=False, server_default="0"),
+    Column("warnings", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("embedding_model_id", Uuid),
+    Column("index_digest", String(64)),
+    Column("purged_at", DateTime(timezone=True)),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("org_id", "document_id", "number"),
+    UniqueConstraint("org_id", "document_id", "id"),
+    ForeignKeyConstraint(["org_id", "knowledge_id"], ["aio_knowledge_bases.org_id", "aio_knowledge_bases.id"]),
+    ForeignKeyConstraint(["org_id", "document_id"], ["aio_knowledge_documents.org_id", "aio_knowledge_documents.id"]),
+    ForeignKeyConstraint(["org_id", "requested_by"], ["aio_memberships.org_id", "aio_memberships.user_id"]),
+    ForeignKeyConstraint(["org_id", "embedding_model_id"], ["aio_embedding_models.org_id", "aio_embedding_models.id"]),
+    CheckConstraint("state IN ('uploading','queued','parsing','indexing','ready','failed','deleted')", name="state"),
+    CheckConstraint("upload_state IN ('pending','writing','stored')", name="upload_state"),
+    CheckConstraint("max_bytes BETWEEN 1 AND 8388608 AND storage_reserved_bytes >= 0", name="source_bound"),
+)
+knowledge_jobs = Table(
+    "aio_knowledge_jobs",
+    metadata,
+    *base(),
+    Column("version_id", Uuid, nullable=False),
+    Column("requested_by", Uuid, nullable=False),
+    Column("membership_revision", Integer, nullable=False),
+    Column("queued_at", DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    Column("state", String(24), nullable=False, server_default="queued"),
+    Column("phase", String(24), nullable=False, server_default="parse"),
+    Column("generation", Integer, nullable=False, server_default="0"),
+    Column("lease_owner", String(128)),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("deadline_at", DateTime(timezone=True)),
+    Column("binding_id", Uuid),
+    Column("dispatch_id", Uuid),
+    Column("spec", JSONB),
+    Column("spec_digest", String(64)),
+    Column("result_sha256", String(64)),
+    Column("result_bytes", Integer),
+    Column("storage_reserved_bytes", Integer, nullable=False, server_default="0"),
+    Column("cleanup_state", String(24), nullable=False, server_default="not_required"),
+    Column("export_acknowledged", Boolean, nullable=False, server_default=text("false")),
+    Column("error_code", String(64)),
+    Column("finished_at", DateTime(timezone=True)),
+    UniqueConstraint("org_id", "version_id"),
+    ForeignKeyConstraint(["org_id", "version_id"], ["aio_knowledge_versions.org_id", "aio_knowledge_versions.id"]),
+    ForeignKeyConstraint(["org_id", "requested_by"], ["aio_memberships.org_id", "aio_memberships.user_id"]),
+    CheckConstraint(
+        "state IN ('queued','leased','cleanup_pending','ready','failed','recovery_required')", name="state"
+    ),
+    CheckConstraint("phase IN ('parse','embed','publish')", name="phase"),
+    CheckConstraint("cleanup_state IN ('not_required','pending','confirmed')", name="cleanup_state"),
+)
+knowledge_chunks = Table(
+    "aio_knowledge_chunks",
+    metadata,
+    *base(),
+    Column("version_id", Uuid, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("location", JSONB, nullable=False),
+    Column("digest", String(64), nullable=False),
+    Column("terms", ARRAY(Text), nullable=False),
+    Column("embedding", Vector()),
+    Column("embedding_model_id", Uuid),
+    Column("bytes", Integer, nullable=False),
+    UniqueConstraint("org_id", "version_id", "ordinal"),
+    ForeignKeyConstraint(["org_id", "version_id"], ["aio_knowledge_versions.org_id", "aio_knowledge_versions.id"]),
+    ForeignKeyConstraint(["org_id", "embedding_model_id"], ["aio_embedding_models.org_id", "aio_embedding_models.id"]),
+    CheckConstraint("bytes BETWEEN 1 AND 4096", name="content_size"),
+)
+Index("ix_aio_knowledge_terms", knowledge_chunks.c.terms, postgresql_using="gin")
+Index("ix_aio_knowledge_version", knowledge_chunks.c.org_id, knowledge_chunks.c.version_id)
+knowledge_queries = Table(
+    "aio_knowledge_queries",
+    metadata,
+    *base(),
+    Column("knowledge_id", Uuid, nullable=False),
+    Column("requested_by", Uuid, nullable=False),
+    Column("membership_revision", Integer, nullable=False),
+    Column("run_id", Uuid),
+    Column("invocation_id", Uuid),
+    Column("generation", Integer),
+    Column("request_key", String(128), nullable=False),
+    Column("query_digest", String(64), nullable=False),
+    Column("query", String(2048), nullable=False),
+    Column("top_k", Integer, nullable=False, server_default="5"),
+    Column("version_ids", JSONB, nullable=False),
+    Column("state", String(24), nullable=False, server_default="preparing"),
+    Column("result_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("query_vector", Vector()),
+    Column("error_code", String(64)),
+    UniqueConstraint("org_id", "requested_by", "request_key"),
+    ForeignKeyConstraint(["org_id", "knowledge_id"], ["aio_knowledge_bases.org_id", "aio_knowledge_bases.id"]),
+    ForeignKeyConstraint(["org_id", "requested_by"], ["aio_memberships.org_id", "aio_memberships.user_id"]),
+    ForeignKeyConstraint(["org_id", "run_id"], ["aio_runs.org_id", "aio_runs.id"]),
+    ForeignKeyConstraint(["org_id", "invocation_id"], ["aio_invocations.org_id", "aio_invocations.id"]),
+    CheckConstraint("state IN ('preparing','embedding','completed','failed')", name="state"),
+)
+knowledge_citations = Table(
+    "aio_knowledge_citations",
+    metadata,
+    *base(),
+    Column("query_id", Uuid, nullable=False),
+    Column("chunk_id", Uuid, nullable=False),
+    Column("version_id", Uuid, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    UniqueConstraint("org_id", "query_id", "ordinal"),
+    ForeignKeyConstraint(["org_id", "query_id"], ["aio_knowledge_queries.org_id", "aio_knowledge_queries.id"]),
+    ForeignKeyConstraint(["org_id", "version_id"], ["aio_knowledge_versions.org_id", "aio_knowledge_versions.id"]),
+    ForeignKeyConstraint(["org_id", "chunk_id"], ["aio_knowledge_chunks.org_id", "aio_knowledge_chunks.id"]),
+)
+embedding_calls = Table(
+    "aio_embedding_calls",
+    metadata,
+    *base(),
+    Column("model_id", Uuid, nullable=False),
+    Column("job_id", Uuid),
+    Column("query_id", Uuid),
+    Column("run_id", Uuid),
+    Column("budget_id", Uuid, nullable=False),
+    Column("requested_by", Uuid, nullable=False),
+    Column("batch", Integer, nullable=False, server_default="0"),
+    Column("generation", Integer, nullable=False),
+    Column("request_digest", String(64), nullable=False),
+    Column("state", String(24), nullable=False, server_default="prepared"),
+    Column("max_charge", Numeric(20, 6), nullable=False),
+    Column("actual_charge", Numeric(20, 6)),
+    Column("input_tokens", Integer),
+    Column("standalone_reserved", Boolean, nullable=False),
+    Column("result_digest", String(64)),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    UniqueConstraint("org_id", "job_id", "batch"),
+    UniqueConstraint("org_id", "query_id"),
+    ForeignKeyConstraint(["org_id", "model_id"], ["aio_embedding_models.org_id", "aio_embedding_models.id"]),
+    ForeignKeyConstraint(["org_id", "job_id"], ["aio_knowledge_jobs.org_id", "aio_knowledge_jobs.id"]),
+    ForeignKeyConstraint(["org_id", "query_id"], ["aio_knowledge_queries.org_id", "aio_knowledge_queries.id"]),
+    ForeignKeyConstraint(["org_id", "run_id"], ["aio_runs.org_id", "aio_runs.id"]),
+    ForeignKeyConstraint(["org_id", "budget_id"], ["aio_budgets.org_id", "aio_budgets.id"]),
+    ForeignKeyConstraint(["org_id", "requested_by"], ["aio_memberships.org_id", "aio_memberships.user_id"]),
+    CheckConstraint("(job_id IS NOT NULL)::int + (query_id IS NOT NULL)::int = 1", name="context"),
+    CheckConstraint("state IN ('prepared','started','succeeded','unknown','resolved','not_sent')", name="state"),
+    CheckConstraint("max_charge > 0 AND (actual_charge IS NULL OR actual_charge >= 0)", name="charge"),
+)
+embedding_ledger = Table(
+    "aio_embedding_ledger",
+    metadata,
+    *base(),
+    Column("call_id", Uuid, nullable=False),
+    Column("actor_id", Uuid, nullable=False),
+    Column("budget_id", Uuid, nullable=False),
+    Column("status", String(24), nullable=False),
+    Column("amount", Numeric(20, 6)),
+    Column("evidence_ref", String(256)),
+    UniqueConstraint("org_id", "call_id", "status"),
+    ForeignKeyConstraint(["org_id", "call_id"], ["aio_embedding_calls.org_id", "aio_embedding_calls.id"]),
+    ForeignKeyConstraint(["org_id", "actor_id"], ["aio_memberships.org_id", "aio_memberships.user_id"]),
+    ForeignKeyConstraint(["org_id", "budget_id"], ["aio_budgets.org_id", "aio_budgets.id"]),
+)
+BOOTSTRAP_TABLES = v6.BOOTSTRAP_TABLES
+TENANT_TABLES = tuple(t for t in metadata.tables.values() if t.name not in BOOTSTRAP_TABLES)

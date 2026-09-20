@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .platform_settings import DeploymentMode, PlatformSettings, deployment_mode, require_legacy_mode
 from .audit import AuditLogger
 from .clients.browser import BrowserCliClient
 from .clients.node_repl import NodeReplClient
@@ -83,6 +84,7 @@ class RuntimeContainer:
     """应用运行时依赖，方便测试时替换为 fake client。"""
 
     def __init__(self, settings: Settings):
+        require_legacy_mode()
         self.settings = settings
         self.sandbox = SandboxClient(settings.sandbox_url, settings.sandbox_token)
         self.node = NodeReplClient(settings.node_repl_url)
@@ -124,6 +126,12 @@ def _authorized(request: Request, token: str) -> bool:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    if deployment_mode() is not DeploymentMode.LEGACY_LOCAL:
+        if settings is not None:
+            raise ValueError("Legacy settings cannot initialize platform mode")
+        from .api.v2.application import create_platform_app
+
+        return create_platform_app(PlatformSettings.from_env())
     settings = settings or Settings.from_env()
     static_dir = Path(__file__).parent / "static"
 

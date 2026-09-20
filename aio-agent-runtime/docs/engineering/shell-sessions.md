@@ -2,7 +2,7 @@
 
 Session lifecycle, async execution, long-running tasks, and process management.
 
-**Related**: [bash.md](bash.md) for full command reference, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [bash.md](../../skills/system/aio-sandbox/references/bash.md) for full command reference, [SKILL.md](../../skills/system/aio-sandbox/SKILL.md) for quick start.
 
 ## Contents
 

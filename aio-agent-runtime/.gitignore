@@ -19,3 +19,6 @@ npm-debug.log*
 config/models.local.json
 *.log
 apps/sandbox-lite/tmp/*
+
+# Editable development installs are generated metadata, not source.
+*.egg-info/

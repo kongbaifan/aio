@@ -1,0 +1,31 @@
+{
+  "endpoints": [
+    {
+      "id": "company-oauth",
+      "url": "https://mcp.example.test/mcp",
+      "authentication": "oauth2",
+      "read_tools": ["search_company_documents"],
+      "private_networks": [],
+      "denied_networks": [],
+      "timeout_seconds": 30,
+      "oauth": {
+        "issuer": "https://identity.example.test/mcp",
+        "metadata_url": "https://identity.example.test/.well-known/oauth-authorization-server/mcp",
+        "resource_metadata_url": "https://mcp.example.test/.well-known/oauth-protected-resource/mcp",
+        "authorization_endpoint": "https://identity.example.test/mcp/authorize",
+        "token_endpoint": "https://identity.example.test/mcp/token",
+        "revocation_endpoint": "https://identity.example.test/mcp/revoke",
+        "jwks_uri": "https://identity.example.test/mcp/jwks",
+        "redirect_uri": "https://agent.example.test/auth/mcp/callback/company-oauth",
+        "client_id": "replace-with-pre-registered-client-id",
+        "client_auth_method": "client_secret_basic",
+        "client_secret_env": "CONNECTOR_OAUTH_CLIENT_SECRET_COMPANY",
+        "scopes": ["openid", "mcp.read"],
+        "resource": "https://mcp.example.test/mcp",
+        "require_issuer_response": true,
+        "access_token_format": "opaque",
+        "authorization_parameters": {"prompt": "consent"}
+      }
+    }
+  ]
+}

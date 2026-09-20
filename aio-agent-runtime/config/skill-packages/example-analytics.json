@@ -1,0 +1,92 @@
+{
+  "schema_version": 2,
+  "name": "analytics-summary",
+  "version": "1.0.0",
+  "description": "Use the approved NumPy/Pandas runtime to summarize bounded numeric input.",
+  "source": "Internal example; reviewed dependency environment required",
+  "license": "Internal example; third-party dependency licenses require separate review",
+  "runtime_manifest_digest": "84dd466c717ceec4bab9f5193efa4254088d30860c4b0c60cc5a49b685c44600",
+  "dependencies": [
+    {
+      "name": "numpy",
+      "version": "2.5.3"
+    },
+    {
+      "name": "pandas",
+      "version": "3.0.5"
+    }
+  ],
+  "instruction_path": "SKILL.md",
+  "reference_paths": [],
+  "files": [
+    {
+      "path": "SKILL.md",
+      "content": "# Approved numerical summary\nUse only the fixed dependency environment. No online installation or credential access."
+    },
+    {
+      "path": "scripts/analyse.py",
+      "content": "import numpy as np\nimport pandas as pd\ndef run(payload):\n    frame = pd.DataFrame({'value': payload['values']})\n    frame.to_csv('analytics-result.csv', index=False)\n    data = frame['value'].to_numpy(dtype=float)\n    return {'mean': float(np.mean(data)), 'total': float(np.sum(data)), 'count': len(data)}\n"
+    }
+  ],
+  "entrypoints": [
+    {
+      "name": "analytics_summary",
+      "path": "scripts/analyse.py",
+      "description": "Summarize numeric data with locked NumPy/Pandas and produce a private CSV.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "mean": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mean",
+          "total",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "tests": [
+        {
+          "input": {
+            "values": [
+              2,
+              4,
+              6
+            ]
+          },
+          "expected": {
+            "mean": 4,
+            "total": 12,
+            "count": 3
+          }
+        }
+      ],
+      "timeout_seconds": 20
+    }
+  ]
+}

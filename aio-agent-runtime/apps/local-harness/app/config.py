@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .paths import project_root
+from .platform_settings import require_legacy_mode
 
 
 def _as_int(name: str, default: int, minimum: int = 1) -> int:
@@ -96,6 +97,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        require_legacy_mode()
         root = project_root()
         _load_environment_file(root)
         skill_root_value = os.environ.get("HARNESS_SKILL_ROOTS", str(root / "skills"))
