@@ -1,6 +1,9 @@
-fastapi>=0.115.0
+# fastapi/pydantic are pinned: the checked-in OpenAPI contract is regenerated and byte-compared in CI,
+# and schema output changes across minor versions (pydantic 2.14 drops Decimal string "pattern").
+# Same pins as services/connector-gateway; bump together with export_openapi.py + npm run api:types.
+fastapi==0.139.2
 uvicorn[standard]>=0.34.0
 httpx>=0.27.0
-pydantic>=2.6.0
+pydantic==2.13.4
 python-dotenv>=1.0.0
 

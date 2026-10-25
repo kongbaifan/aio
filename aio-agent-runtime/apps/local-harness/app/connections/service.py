@@ -10,6 +10,8 @@ from sqlalchemy import insert, select, update, func
 
 from ..admin.service import AdminService
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.provisioning import provision_tool
 from ..platform_errors import PlatformError
 from ..policy.repository import current_facts, db_now, require_resource, visible_resources
@@ -159,7 +161,13 @@ class ConnectionService:
                     endpoint_digest=profile["digest"],
                 )
             )
-            self.admin.audit(c, p, "mcp.definition.create", id, "draft")
+            audit.record(
+                c,
+                p,
+                'mcp.definition.create',
+                id,
+                'draft',
+            )
             return self.server_metadata(
                 c.execute(select(s.mcp_servers).where(s.mcp_servers.c.id == id)).mappings().one()
             )
@@ -241,7 +249,13 @@ class ConnectionService:
                             org_id=p.org_id, id=uuid4(), resource_id=id, department_id=body.department_id, action=action
                         )
                     )
-            self.admin.audit(c, p, "mcp.connection.create", id, body.scope)
+            audit.record(
+                c,
+                p,
+                'mcp.connection.create',
+                id,
+                body.scope,
+            )
             return self.metadata(current_connection(c, p, id, action="connection.read", active=False, allow_draft=True))
 
     def prepare_credential(self, p, id, body, *, oauth=False):
@@ -339,7 +353,14 @@ class ConnectionService:
                 .where(s.resources.c.org_id == p.org_id, s.resources.c.id == id)
                 .values(revision=s.resources.c.revision + 1)
             )
-            self.admin.audit(c, p, "mcp.credential.prepare", id, "pending", {"binding_id": str(bid)})
+            audit.record(
+                c,
+                p,
+                'mcp.credential.prepare',
+                id,
+                'pending',
+                m.CredentialPrepared(binding_id=str(bid)),
+            )
             return {"binding_id": bid, "state": "pending", "expires_at": expires}
 
     @staticmethod
@@ -421,7 +442,14 @@ class ConnectionService:
                 .where(s.resources.c.org_id == p.org_id, s.resources.c.id == id)
                 .values(revision=s.resources.c.revision + 1)
             )
-            self.admin.audit(c, p, "mcp.credential.activate", id, "active", {"credential_revision": row["revision"]})
+            audit.record(
+                c,
+                p,
+                'mcp.credential.activate',
+                id,
+                'active',
+                m.CredentialActivated(credential_revision=row['revision']),
+            )
             return self.metadata(current_connection(c, p, id, action="connection.read", active=False, manage=True))
 
     def _start_discovery(self, p, id, request_id):
@@ -541,7 +569,13 @@ class ConnectionService:
                 .where(s.mcp_connections.c.org_id == p.org_id, s.mcp_connections.c.id == conn["id"])
                 .values(state="active")
             )
-            self.admin.audit(c, p, "mcp.discovery", conn["id"], "ready")
+            audit.record(
+                c,
+                p,
+                'mcp.discovery',
+                conn['id'],
+                'ready',
+            )
             return {"id": job["id"], "state": "ready", "result": result, "error_code": None}
 
     def _fail_discovery(self, org, id, code):
@@ -672,7 +706,13 @@ class ConnectionService:
                     discovery_id=body.discovery_id,
                 )
             )
-            self.admin.audit(c, p, "mcp.definition.publish", id, "published")
+            audit.record(
+                c,
+                p,
+                'mcp.definition.publish',
+                id,
+                'published',
+            )
             return self.server_metadata(
                 c.execute(select(s.mcp_servers).where(s.mcp_servers.c.id == id, s.mcp_servers.c.org_id == p.org_id))
                 .mappings()
@@ -715,7 +755,13 @@ class ConnectionService:
                 )
                 .values(state="retiring")
             )
-            self.admin.audit(c, p, "mcp.connection.revoke", id, "revoked")
+            audit.record(
+                c,
+                p,
+                'mcp.connection.revoke',
+                id,
+                'revoked',
+            )
             c.execute(
                 update(s.mcp_oauth_attempts)
                 .where(

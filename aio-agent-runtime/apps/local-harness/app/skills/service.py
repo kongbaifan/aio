@@ -8,6 +8,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..admin.service import AdminService
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.provisioning import provision_tool
 from ..platform_errors import PlatformError
 from ..policy.repository import db_now, require_resource, visible_resources
@@ -148,7 +150,13 @@ class SkillService:
                 owner_id=p.user_id,
             )
         )
-        self.admin.audit(c, p, "skill.draft.create", id, "quarantined")
+        audit.record(
+            c,
+            p,
+            'skill.draft.create',
+            id,
+            'quarantined',
+        )
         return self.metadata(self._version(c, p, id))
 
     def management_list(self, p):
@@ -285,13 +293,13 @@ class SkillService:
                     revision=row["revision"] + 1,
                 )
             )
-            self.admin.audit(
+            audit.record(
                 c,
                 p,
-                "skill.validation.request",
+                'skill.validation.request',
                 id,
-                "queued",
-                {"job_id": str(job_id), "reviewer_id": str(body.reviewer_id), "package_digest": row["digest"]},
+                'queued',
+                m.SkillValidation(job_id=str(job_id), reviewer_id=str(body.reviewer_id), package_digest=row['digest']),
             )
             return {"job_id": job_id, "state": "queued", "revision": row["revision"] + 1}
 
@@ -412,7 +420,12 @@ class SkillService:
                     published_at=db_now(c) if state == "published" else None,
                 )
             )
-            self.admin.audit(
-                c, p, "skill.review", id, state, {"validation_job_id": str(job["id"]), "package_digest": row["digest"]}
+            audit.record(
+                c,
+                p,
+                'skill.review',
+                id,
+                state,
+                m.SkillReviewed(validation_job_id=str(job['id']), package_digest=row['digest']),
             )
             return self.metadata(self._version(c, p, id))

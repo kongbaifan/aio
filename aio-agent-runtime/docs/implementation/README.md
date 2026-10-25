@@ -1,6 +1,7 @@
 # 企业 Agent 平台：实际实现与验证进度
 
 > 状态：实施中，目标尚未完成。规划范围仍是企业多部门平台，不缩减为这一轮基础代码。  
+> 2026-10-25 后续增量：[持久审计与结构化元数据（GOV-02 Slice A）](audit-redaction-plan.md) 已达 v14 / 61 表 / 90 路径，在注入全部镜像的完整平台套件（583 tests、0 failures、0 skipped）中通过；outbox 归档投递与统一出口脱敏（Slice B/C）未做。本轮验证在用户提供的远程 Linux 主机（Docker 29、Python 3.13）上执行，不是本机或 CI；见第 3 节。
 > 2026-09-16 后续增量：[组织 / 部门共享预算](shared-budget-plan.md) 已达 v13 / 61 表 / 90 路径，并在注入全部镜像的完整平台套件（500 tests、0 failures、0 skipped）与两套独立干净栈的真实 HTTP 中通过；模型 / IdP 仍为合成，公司真实接入、浏览器视觉验收与全部生产 Gate 均未通过。下方归档增量的历史统计属于上一已核验结果，不代表本增量范围。
 > 2026-09-14：[Skill 归档隔离导入](skill-archive-plan.md) 已完成本增量的真实 Docker/PG/HTTP 与 Web 单元验证；该增量完成时为 v12 / 59 表 / 87 条 API 路径，已被上面的预算增量取代。浏览器、公司提供方和全部生产 Gate 仍未通过。
 > 基线提交：`1164d95`；规划文件是设计快照，本目录只记录当前代码能够证明的事实。没有把 110 父任务或 718 子任务整体标为完成。
@@ -13,7 +14,7 @@
 - 不可变 Principal、当前 facts 的默认拒绝授权、用户级资源 Grant、组织策略与数据等级上限。
 - OIDC code + PKCE + state/浏览器绑定/nonce/签名/issuer/audience 校验；只允许已由管理员预登记的账户。
 - Opaque BFF Cookie 仅存 hash，CSRF/Origin 校验；logout 不擅自取消后台任务，成员停用阻止后续访问。
-- v1～v12 保持不可变迁移快照；当前为 `0013_shared_budgets`、61 张 PostgreSQL 表，包括部门、Skill、MCP/OAuth/stdio 租约、知识库、同 Run 的 Team 计划/步骤及共享预算池/分配；继续使用 FORCE RLS、复合组织外键和独立 runtime/迁移账号。
+- v1～v13 保持不可变迁移快照；当前为 `0014_audit_records`、61 张 PostgreSQL 表，包括部门、Skill、MCP/OAuth/stdio 租约、知识库、同 Run 的 Team 计划/步骤及共享预算池/分配；继续使用 FORCE RLS、复合组织外键和独立 runtime/迁移账号。
 - 私有 Project/Session/Agent 读取与创建；共享 Project 不公开私人 Session；上级 Project 撤权也影响列表/详情。
 - Run、消息、Job、ManifestSnapshot、预算预留、起始事件和幂等响应在同一事务提交。
 - 同 Session 未解决任务唯一约束；同用户两个 Session 并发不能透支最后一份预算。
@@ -177,6 +178,15 @@
 - 本增量新增预算用例 64 项（含锁前缀负控：错误前缀留下的签名与正确前缀不同）。实际 HTTP 41 条断言、其中 25 条共享预算断言，两套独立干净栈复现；首次真跑的失败在验证脚手架（按原始 JSON 字符串比较 `"0"` 与 `"0.000000"`），不是产品缺陷。
 - 不含月度 / 跨币种周期、供应商发票自动同步、全部工具价格、告警投递、财务导出、部门管理权委派、完整用量分析、容量 / HA 与生产 Gate。详见 [共享预算契约](../engineering/platform-shared-budget-contract.md) 与 [任务记录](shared-budget-plan.md)。
 
+### 2026-10-25：持久审计与结构化元数据（GOV-02 Slice A）
+
+- v14 `0014_audit_records`：审计表加 trace/决策/revision/风险/`metadata_schema` 列与 `NOT VALID` CHECK（历史行保持原值并标 `legacy`，所有新写入强制结构化、4 KiB 未压缩上限）；分页索引；outbox 投递簿记列。表数仍为 61。
+- 唯一写入口 `observability/audit.record()`：每个 action 一个封闭 pydantic 模型 + outcome 词表，无自由文本字段；旧的 `AdminService.audit` / `PlatformService._audit` 与散落的 `insert(s.audit)` 已移除（12 文件 55 处，54 个 action）。
+- 高风险 fail-closed：`prepare_dispatch`、`consume_dispatch`（新增）、审批决定、未知效果核对（新增 `run.reconcile`，只存证据摘要）、审计查询在返回前用 `require_recorded` 校验本次事实；审计不可写即 503 `AUDIT_SINK_UNAVAILABLE` 且无外部效果。
+- Runtime 对审计只读+追加、对 outbox 事实列不可改且无 DELETE；启动校验拒绝多余授权。审计查询限 `org_admin`/`auditor`，返回无 `metadata`，每次读取同事务留 `audit.read`。HTTP 请求的 trace 由服务端生成，忽略客户端头。
+- 实施中修复：CHECK 中 `':v1'` 被 SQLAlchemy 当绑定参数渲染成 `'NULL'`，导致全部结构化写入被拒（266 个 PG 用例 error）；`test_shared_budget_migration` 的扰动钩子按对象身份匹配 v14 表而失效（7 failed）。两者已修并补回归。
+- 未做：outbox relay/归档投递/两类故障分离（Slice B），`x-aio-sensitive` 与统一出口脱敏（Slice C），审计导出、保留策略。详见 [审计契约](../engineering/platform-audit-contract.md) 与 [任务记录](audit-redaction-plan.md)。
+
 ## 2. 明确尚未完成，不得当作可上线平台
 
 - 工作台与管理台已可操作；外部企业目录同步、部门管理权委派、完整支持访问流程和浏览器视觉验收仍未完成。
@@ -188,7 +198,7 @@
 - Artifact 字节上传和生成文件下载可用；通用附件的恶意内容扫描/杀毒/安全预览、S3/跨节点对象后端、完整生命周期与孤立 blob 自动清理仍未完成。当前附件不会假称已杀毒，未完成写盘保留配额与内容追踪。
 - 知识库的六格式隔离摄取、pgvector/中文检索、文档ACL/引用/删除已实现；OCR/外部源同步、专业扫描、完整大规模生命周期与生产治理仍未完成。
 - 个人 Run 结算、unknown 费用核对、模型价格登记、个人预算管理以及组织/部门共享硬上限已实现；供应商账单同步、月度/跨币种周期、告警投递、财务导出、部门管理权委派与更细运营分析仍未完成。
-- 支持访问、全量审计/脱敏、kill switch、运营监控、备份恢复、HA、灰度/真实业务验收未完成。
+- 持久结构化审计与高风险 fail-closed 已实现；审计归档投递、统一出口脱敏、审计导出与保留策略、支持访问、kill switch、运营监控、备份恢复、HA、灰度/真实业务验收未完成。
 - 尚未接入公司真实 IdP、模型、业务系统或生产数据；签名验证测试使用合成 IdP 和真实 JWT 验签。
 - G0–G6 的完整放行均未声明通过。普通 GUC RLS 不被描述为能抵御应用 DB 凭据失陷。
 
@@ -198,7 +208,8 @@
 
 `pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f`
 
-- 平台套件：本轮已由 `scripts/platform/test_sandbox.py` 构建并注入全部镜像后完整运行，**500 tests、0 failures、0 errors、0 skipped**（证据 `var/verification/platform-postgres.xml`），覆盖契约、真实 PostgreSQL/Worker/权限/上传、固定依赖、标准计算、Skill、知识库、Team、stdio/附件、队列/生命周期锁序及本增量的共享预算（`test_shared_budgets` 21、`test_shared_budget_contracts` 27、`test_shared_budget_migration` 7、`test_budget_lock_order` 9，共 64 项）。仅跑 `scripts/platform/test_postgres.py`（不构建镜像）时为 500 collected、426 passed、74 skipped（证据 `var/verification/final-verify-platform.xml`）：`AIO_TEST_COMPUTE_IMAGE` 系列 48（真实计算 27、归档导入 14、Skill 执行 6、MCP/compute 边界 1）、`AIO_TEST_STDIO_IMAGE` 12、`AIO_TEST_DOCUMENT_IMAGE` 9、`AIO_TEST_DEPENDENCY_PROFILE` 5，skip 不等于通过，需注入镜像后才实际执行。此前 **436 tests** 属于上一（Skill 归档）增量的较小套件，不是本轮结论。本轮修复过两批失败，均在用例侧、且都已在上述全绿运行中复跑通过：`test_queue_expiry_recovery_releases_every_scope_exactly_once` 前置常量写错（准入占额是 manifest 的 `run_budget` 0.1，而非单次模型调用上限 0.02，失败证据 `var/verification/gt-baseline-nogate.xml`）；`test_CONTROL_wrong_prefix_is_rejected` 的 `inverted_pools` / `no_pool_locks` 两个负控参数（失败证据 `var/verification/gt-postfix-platform.xml`）。不能把全部平台用例都称为 Docker 用例。
+- **2026-10-25 审计增量（当前结论）**：在用户提供的远程 Linux 主机（Docker 29.8.2、Python 3.13.5，非本机、非 CI）上，以与本机逐字节一致的 321 个 Python 源文件运行 `scripts/platform/test_sandbox.py`：平台套件 **583 tests、0 failures、0 errors、0 skipped**（含 `test_audit_integration` 31、`test_audit_contracts` 40），Manager 136、runtime-policy 15、document-parser 16 全绿；`test_postgres.py` 仅 PG 为 506 passed / 74 skipped（skip 均为未注入镜像）。connector-gateway 在 3.13 下 1 failed（`test_real_tls_keeps_original_sni...`：3.13 默认 `VERIFY_X509_STRICT` 拒绝缺 AKI 的测试证书，与本增量无关），在 CI 同版本 Python 3.12.15 下 **82 passed**。同一套件前一轮出现过一次 `test_uncertain_effect_stops_whole_team_without_blind_replay` 失败（invocation 查询为空），单独 8 次与再次全量均通过，未定位根因，按偶发记录。本机：ruff、local-harness 411 passed（PG 用例 skip）、sandbox-lite 24、Web 126、`tsc -b`、compileall、pip check 通过；OpenAPI 与 `generated.ts` 已重新生成（新增审计查询参数）。证据 `var/verification/audit-v14/`（平台 XML SHA-256 前缀 `8fe9a79e`）。未重跑真实 HTTP 端到端脚本与 `npm audit`。
+- 以下为 2026-09-16 共享预算增量的历史结果。平台套件：当时已由 `scripts/platform/test_sandbox.py` 构建并注入全部镜像后完整运行，**500 tests、0 failures、0 errors、0 skipped**（证据 `var/verification/platform-postgres.xml`），覆盖契约、真实 PostgreSQL/Worker/权限/上传、固定依赖、标准计算、Skill、知识库、Team、stdio/附件、队列/生命周期锁序及本增量的共享预算（`test_shared_budgets` 21、`test_shared_budget_contracts` 27、`test_shared_budget_migration` 7、`test_budget_lock_order` 9，共 64 项）。仅跑 `scripts/platform/test_postgres.py`（不构建镜像）时为 500 collected、426 passed、74 skipped（证据 `var/verification/final-verify-platform.xml`）：`AIO_TEST_COMPUTE_IMAGE` 系列 48（真实计算 27、归档导入 14、Skill 执行 6、MCP/compute 边界 1）、`AIO_TEST_STDIO_IMAGE` 12、`AIO_TEST_DOCUMENT_IMAGE` 9、`AIO_TEST_DEPENDENCY_PROFILE` 5，skip 不等于通过，需注入镜像后才实际执行。此前 **436 tests** 属于上一（Skill 归档）增量的较小套件，不是本轮结论。本轮修复过两批失败，均在用例侧、且都已在上述全绿运行中复跑通过：`test_queue_expiry_recovery_releases_every_scope_exactly_once` 前置常量写错（准入占额是 manifest 的 `run_budget` 0.1，而非单次模型调用上限 0.02，失败证据 `var/verification/gt-baseline-nogate.xml`）；`test_CONTROL_wrong_prefix_is_rejected` 的 `inverted_pools` / `no_pool_locks` 两个负控参数（失败证据 `var/verification/gt-postfix-platform.xml`）。不能把全部平台用例都称为 Docker 用例。
 - Manager/隔离套件：**136 tests，0 failures，0 errors，0 skipped**；包括标准隔离、stdio、固定依赖真实镜像与恶意 wheel 拒绝，以及对应契约测试；新增 17 项真实 Docker 资源及故障注入的并发清理/404/409/故障保留回归。
 - 独立运行时策略契约：**15 passed**；覆盖签名、独立信任根、test/production 分离、内容篡改和固定清单边界。
 - 文档 parser 契约：**16 passed**；平台套件另包含 9 项实际 Docker 六格式/活动内容拒绝链路，不能把 host 合成夹具测试当作真实文档隔离证据。
@@ -240,13 +251,13 @@ docker pull pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f3
 
 ## 5. 当前新增启动入口和限制
 
-- API：`apps/local-harness/run.py`，显式 platform 模式使用 v2；部署先执行迁移到 `0013_shared_budgets`，再由操作员刷新 `grant_runtime_access`。CLI 为 `scripts/platform/manage_platform.py`，不在 API 启动时自动 bootstrap。
+- API：`apps/local-harness/run.py`，显式 platform 模式使用 v2；部署先执行迁移到 `0014_audit_records`，再由操作员刷新 `grant_runtime_access`（v14 起会收回 outbox DELETE 与事实列 UPDATE；按代码，未刷新的 v13 授权会使启动校验失败，该升级顺序本身未单独实测）。CLI 为 `scripts/platform/manage_platform.py`，不在 API 启动时自动 bootstrap。
 - Worker：`apps/local-harness/run_worker.py`。配置模板为 `config/platform-worker.env.example`；不自动读取旧 `.env`，不加载个人 Codex/其他代理配置。
 - 模型/工具/Agent、成员/部门、预算与授权可通过管理页面配置。Skill 由私有草稿、隔离验证、不同审核人发布后引用；第三方通讯录同步尚未完成。
 - 默认没有未经配置的执行器。显式 manager/storage 配置后可用 sandbox.python；Manager 的服务凭据与 control-authority 凭据不同，计算 cell 不持有它们。
 - Manager 启动/权限与 profile 配置见 [Manager README](../../services/sandbox-manager/README.md)，生成的测试 image digest 在 `var/verification/sandbox-profile.json`。
 - stdio 额外配置 Manager 的 `SANDBOX_STDIO_PROFILES` / `SANDBOX_CONNECTOR_TOKEN` 和 Gateway 的 `CONNECTOR_STDIO_MANAGER_URL` / `CONNECTOR_STDIO_MANAGER_TOKEN`；专用 token 不能调用普通 compute API，反之亦然。`export_stdio_endpoint.py` 从审核 profile 导出一致引用。
-- 代码契约见 [Worker](../engineering/platform-worker-contract.md)、[沙箱/产物](../engineering/platform-sandbox-contract.md)、[管理台/Web](../engineering/platform-admin-web-contract.md)、[Skill](../engineering/platform-skill-contract.md)、[MCP](../engineering/platform-mcp-contract.md)、[知识库](../engineering/platform-knowledge-contract.md)、[Team](../engineering/platform-team-contract.md)、[文件检查点](../engineering/platform-workspace-checkpoint-contract.md)、[OAuth](../engineering/platform-mcp-oauth-contract.md)、[stdio](../engineering/platform-mcp-stdio-contract.md)、[stdio 附件输入](../engineering/platform-mcp-stdio-input-contract.md)。
+- 代码契约见 [Worker](../engineering/platform-worker-contract.md)、[沙箱/产物](../engineering/platform-sandbox-contract.md)、[管理台/Web](../engineering/platform-admin-web-contract.md)、[Skill](../engineering/platform-skill-contract.md)、[MCP](../engineering/platform-mcp-contract.md)、[知识库](../engineering/platform-knowledge-contract.md)、[Team](../engineering/platform-team-contract.md)、[文件检查点](../engineering/platform-workspace-checkpoint-contract.md)、[OAuth](../engineering/platform-mcp-oauth-contract.md)、[stdio](../engineering/platform-mcp-stdio-contract.md)、[stdio 附件输入](../engineering/platform-mcp-stdio-input-contract.md)、[审计](../engineering/platform-audit-contract.md)。
 
 ## 6. 下一条实际关键路径
 

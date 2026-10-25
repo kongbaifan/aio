@@ -1,6 +1,7 @@
 """Administrative routes share authentication/CSRF middleware and never expose database/runtime credentials."""
 
 from uuid import UUID
+from datetime import datetime
 import asyncio
 
 from fastapi import Depends, Query
@@ -141,8 +142,18 @@ def register_admin_routes(app, admin: AdminService, principal):
         return await asyncio.to_thread(admin.own_budget, identity)
 
     @app.get("/api/v2/admin/audit")
-    async def audit(limit: int = Query(default=100, ge=1, le=200), identity=Depends(principal)):
-        return {"items": await asyncio.to_thread(admin.audit_events, identity, limit)}
+    async def audit(
+        limit: int = Query(default=100, ge=1, le=200),
+        since: datetime | None = None,
+        until: datetime | None = None,
+        before_created_at: datetime | None = None,
+        before_id: UUID | None = None,
+        identity=Depends(principal),
+    ):
+        return {"items": await asyncio.to_thread(
+            admin.audit_events, identity, limit, since=since, until=until,
+            before_created_at=before_created_at, before_id=before_id,
+        )}
 
     @app.get("/api/v2/admin/runs")
     async def operations(limit: int = Query(default=100, ge=1, le=200), identity=Depends(principal)):

@@ -14,7 +14,7 @@ from ..auth.principal import Principal
 from ..platform_errors import PlatformConfigurationError
 from .schema import TENANT_TABLES
 
-SCHEMA_REVISION = "0013_shared_budgets"
+SCHEMA_REVISION = "0014_audit_records"
 
 
 class Database:
@@ -100,3 +100,12 @@ class Database:
                 not r["relrowsecurity"] or not r["relforcerowsecurity"] or r["owned"] or not r["readable"] for r in rows
             ):
                 raise PlatformConfigurationError("Platform tenant tables must have FORCE RLS and a separate owner")
+            unsafe_audit_grants = connection.execute(text(
+                "SELECT has_any_column_privilege(current_user, 'aio_audit_events', 'UPDATE') "
+                "OR has_table_privilege(current_user, 'aio_audit_events', 'DELETE') "
+                "OR has_table_privilege(current_user, 'aio_outbox', 'DELETE') "
+                "OR EXISTS(SELECT 1 FROM unnest(ARRAY['id', 'org_id', 'aggregate_id', 'kind', 'payload', 'created_at']) "
+                "AS field(name) WHERE has_column_privilege(current_user, 'aio_outbox', field.name, 'UPDATE'))"
+            )).scalar_one()
+            if unsafe_audit_grants:
+                raise PlatformConfigurationError("Platform audit facts and outbox payloads must be immutable")

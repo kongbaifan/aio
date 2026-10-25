@@ -175,23 +175,32 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 
 ## 6. 执行与证据清单
 
-- [ ] v14 迁移、审计扩列、outbox 投递簿记与 runtime 最小权限。
+> 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`）；Slice B、C 未开始。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
+
+- [x] v14 迁移、审计扩列、outbox 投递簿记与 runtime 最小权限。
+  **实际**：真 PG 从 `0013_shared_budgets` 升级、legacy 行逐字段不变、新自由 metadata 被拒、仅 legacy 时可降级、存在结构化行时降级拒绝；runtime 对审计 UPDATE/DELETE 及 outbox `payload`/`kind`/`aggregate_id` UPDATE、DELETE 均为 `42501`，六个簿记列可改；启动校验对多授的审计列 UPDATE 报错（负控）。4 KiB 上限实测按未压缩值计算，可压缩大字段同样被拒。实施中发现并修复：CHECK 字符串中的 `':v1'` 被 SQLAlchemy 当作绑定参数渲染为 `'NULL'`，导致全部结构化写入失败；已加不依赖 PG 的 DDL 渲染回归用例。
   **证明**：`0014_audit_records.py` 只加可空列/索引/CHECK，`v1`–`v13` 快照字节未变；真 PG 从 `0013_shared_budgets` 升级后 `alembic_version` 为 `0014_audit_records` 且既有审计行 `metadata_schema='legacy'`、原值逐字段未变；`NOBYPASSRLS` runtime 身份对 `aio_audit_events` 的 UPDATE/DELETE 被 DB 拒绝，对 `aio_outbox` 的 `payload`/`kind`/`aggregate_id` UPDATE 与 DELETE 被拒、仅六个簿记列可改；`pg_column_size` 上限用一条 4KB+ metadata 实测被 DB 拒绝；存在 `metadata_schema<>'legacy'` 行时 downgrade 抛错。
-- [ ] 统一 `observability/audit.py` 的 `record()`，全部 52 个调用点迁移，自由 dict 入口消失。
+- [x] 统一 `observability/audit.py` 的 `record()`，全部 52 个调用点迁移，自由 dict 入口消失。
+  **实际**：`insert(s.audit)` 仅存在于 `observability/audit.py`；`AdminService.audit` 与 `PlatformService._audit` 已删除；12 个文件共 55 处 `record()`（原 52 处 + `tool.dispatch_consumed`、`audit.read`、`run.reconcile`），54 个 action 契约。约束由运行时 `type(metadata) is contract.metadata` + pydantic 重新校验保证（本仓库未启用 mypy）。
   **证明**：全仓 grep `insert(s.audit)` 仅出现在 `observability/audit.py`（现状散落 `admin/service.py`、`runtime/service.py`、`workspaces/service.py:244` 三处）；`record()` 的 `metadata` 形参类型为封闭联合，传入 `dict` 被 mypy/pydantic 拒绝；一条用例对每个 action 断言其模型的允许键集合（多一个键即失败，取 v13 `POOL_VIEW_KEYS` 正向断言范式）。
-- [ ] 高风险 fail-closed：PG 审计不可写即无外部效果，且 `consume_dispatch` 补齐意图审计。
+- [x] 高风险 fail-closed：PG 审计不可写即无外部效果，且 `consume_dispatch` 补齐意图审计。
+  **实际**：用按租户+action 限定的 BEFORE INSERT 触发器注入真实 DB 失败：`prepare_dispatch` 无 dispatch 行；`consume_dispatch` 回滚为可再消费的 `prepared`、无 `tool.started` 事件；Worker 路径 run `failed`、dispatch `not_sent`、`EffectSink.requests == []`；错误为 503 `AUDIT_SINK_UNAVAILABLE` 且无异常链、无触发器消息。`require_recorded` 负控：跳过写入或写到另一 event_id 均被拒。另补齐计划表中的 Run 核对：新增 `run.reconcile`（只存 `evidence_digest`），审计失败时 blocker 保持未解除。
   **证明**：真 PG 用例注入审计插入失败（对 `aio_audit_events` 的 INSERT 权限剥离或触发器抛错）后尝试 `prepare_dispatch` 与 `consume_dispatch`，断言事务回滚、`aio_dispatches` 无新行、`EffectSink.effect_count == 0`、错误码为 `AUDIT_SINK_UNAVAILABLE`；删除 `consume_dispatch` 的新增审计调用会使 `require_recorded` 守卫用例失败（守卫本身有负控）。对应 ECASE-34 前半。
 - [ ] 归档投递可重试、有界退避、单飞租约、重复投递不产生重复事实。
   **证明**：fake 归档 sink 依次返回失败/超时/成功，断言 `attempts` 单调递增、`next_attempt_at` 按退避推进、`last_error_code` 只含稳定码；两个 relay 实例并发下 `FOR UPDATE SKIP LOCKED` 使每行只被一方投递；sink 收到重复投递时以 `(org_id, id)` 幂等键去重，PG 侧 `delivered_at` 只被设置一次；relay 事务内 `pg_locks` 快照证明未持有 `aio_runs`/`aio_organizations`/`aio_budget_pools` 上的锁。
 - [ ] 两类故障不混淆：归档中断不阻断只读请求与已获权动作。
   **证明**：sink 全程不可用时，只读 API（Run 列表/事件回放/知识检索）与已获权高风险 dispatch 仍成功，`AUDIT_ARCHIVE_BACKLOG` 只出现在指标/告警而不进业务响应；同一用例断言 PG 审计行仍然写入且 backlog 计数增长。对应 ECASE-34 后半「不混淆两种故障」。
 - [ ] 脱敏边界：五个出口、schema 级标记、正文不可达。
+  **实际（仅审计出口）**：审计 metadata 封闭类型 + 真实 approved Run 的事实不含 prompt/回答/参数值；`x-aio-sensitive`、统一 `scrub()`、SSE/错误/relay 出口与替换 `_SECRET_PATTERN`、网关 `replace` 均未做（Slice C）。
   **证明**：合成 secret marker 分别嵌入 header、query、body、env、嵌套异常链与工具结果，触发失败/SSE error/审计查询/relay 投递四条出口，断言各出口均无 marker；对标注 `x-aio-sensitive` 的工具参数，审计行不含该字段任何形态（含摘要外的原值）；摘除标记会改变 `definition_digest` 并使发布校验失败；纵深断言层在人为构造的绕过用例中拒绝写入而非替换后放行。对应 ECASE-33。
-- [ ] 审计访问受限且自身留痕，普通运维默认无正文。
+- [x] 审计访问受限且自身留痕，普通运维默认无正文。
+  **实际**：服务层与 HTTP 层 `operator`/成员 403 `ADMIN_FORBIDDEN`，auditor 200 且无 `metadata` 列；每次读取一条 `audit.read`（含 scope/limit/行数/时间窗/游标与 HTTP trace），自审计写失败时查询失败且不新增行。偏差：审计端点是 GET，CSRF 只约束变更请求，「缺 CSRF 的 403」不适用；当前没有导出端点。
   **证明**：`operator` 角色对审计查询/导出返回 403（持有效 CSRF 亦然，且区分越权与缺 CSRF 两种 403）；`org_admin`/`auditor` 每次查询留一条 `audit.read` 行含 scope/行数/时间窗；人为让自审计插入失败时查询返回错误且不返回任何行；`audit.read` 行本身不含正文。
-- [ ] 跨组织隔离与列表分页。
+- [x] 跨组织隔离与列表分页。
+  **实际**：他组织 auditor 结果与本组织事实零交集；越权 403 响应不含他人 user id；`record()` 拒绝为非当前事务租户写入；7 条/页游标遍历固定 `until` 窗口无重复无遗漏；`EXPLAIN` 命中 `ix_aio_audit_org_created_id` 且无 Sort 节点（`enable_seqscan=off` 下断言，小表默认会选顺序扫描）；半个游标和无时区时间 422。
   **证明**：他组织身份读到零行（FORCE RLS）之外，另有正向断言：错误只给受限 scope，不返回他人 `actor_id`/资源存在性/内部路径；新索引下 `ORDER BY created_at DESC, id` 分页在无重复无遗漏的前提下走 `Index Scan`（`EXPLAIN` 断言，避免退化排序被当作通过）。
-- [ ] 完整回归与文档同步，保留未验证项。
+- [x] 完整回归与文档同步，保留未验证项（Slice A 范围）。
+  **实际**：远程 Linux 主机上 `test_sandbox.py` 注入全部镜像，平台 583/0/0/0，Manager 136、runtime-policy 15、document-parser 16 全绿；connector-gateway 在 CI 同版本 3.12 下 82 passed（3.13 下 1 项 TLS 严格校验失败，与本增量无关）。本机 ruff、local-harness、sandbox-lite、Web、`tsc -b`、compileall、pip check 通过；OpenAPI/`generated.ts` 已重新生成。契约 `docs/engineering/platform-audit-contract.md` 已记录复合外键例外。**未做**：`npm audit`、真实 HTTP 端到端脚本重跑、CI 远程运行。证据 `var/verification/audit-v14/`。
   **证明**：`scripts/platform/test_sandbox.py` 现场构建四个镜像并注入全部 `AIO_TEST_*` 后完整平台套件 0 failures/0 errors/0 skipped，套件时间戳晚于本增量最后一次源码改动；Manager/runtime-policy/connector-gateway/document-parser 四套同批次全绿；ruff、local-harness、sandbox-lite、pip check、compileall、前端与 `tsc -b`、npm audit 通过；OpenAPI 与 `generated.ts` 现场重新生成后逐字节一致；新增 `docs/engineering/platform-audit-contract.md` 记录 2.1 的复合外键例外及其理由；`docs/implementation/README.md` 更新至 v14 与实际用例数。
 
 ## 7. 规模估算

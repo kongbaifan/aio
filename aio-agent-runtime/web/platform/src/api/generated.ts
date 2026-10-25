@@ -2311,6 +2311,10 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                since?: string | null;
+                until?: string | null;
+                before_created_at?: string | null;
+                before_id?: string | null;
             };
             header?: never;
             path?: never;

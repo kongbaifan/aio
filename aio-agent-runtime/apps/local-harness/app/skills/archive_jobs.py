@@ -11,6 +11,8 @@ from sqlalchemy import select, update, or_, null
 from ..admin.service import AdminService
 from ..auth.principal import Principal
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..platform_errors import PlatformError
 from ..policy.repository import current_facts, db_now, lock_resource_rows, require_resource
 from ..runtime.actions import canonical_digest, strict_json
@@ -370,13 +372,13 @@ class SkillArchiveJobs:
                 candidate=null(),
                 lease_expires_at=now,
             )
-            self.service.admin.audit(
+            audit.record(
                 c,
                 self.principal(row),
-                "skill.archive.finish",
-                row["id"],
+                'skill.archive.finish',
+                row['id'],
                 state,
-                {"skill_id": str(skill["id"])} if skill else {},
+                m.ArchiveFinished(skill_id=skill["id"] if skill else None),
             )
             # Re-read converts SQL NULL sentinels to normal Python values.
             return self.service.metadata(self.service.row(c, row["org_id"], final["id"]))

@@ -8,6 +8,7 @@ from sqlalchemy import func, insert, select, update, null
 
 from ..admin.service import AdminService
 from ..db import schema as s
+from ..observability import audit
 from ..platform_errors import PlatformError
 from ..policy.repository import db_now, lock_resource_rows, require_resource, visible_resources
 from ..runtime.actions import canonical_digest
@@ -177,7 +178,13 @@ class SkillArchiveService:
                     execution_image=execution["image_digest"],
                 )
             )
-            self.admin.audit(c, p, "skill.archive.prepare", id, "quarantined")
+            audit.record(
+                c,
+                p,
+                'skill.archive.prepare',
+                id,
+                'quarantined',
+            )
             return self.metadata(self.row(c, p.org_id, id))
 
     def upload(self, p, id, data):
@@ -231,7 +238,13 @@ class SkillArchiveService:
                     revision=s.skill_imports.c.revision + 1,
                 )
             )
-            self.admin.audit(c, p, "skill.archive.upload", id, "queued")
+            audit.record(
+                c,
+                p,
+                'skill.archive.upload',
+                id,
+                'queued',
+            )
             return self.metadata(self.row(c, p.org_id, id))
 
     def list(self, p):
@@ -288,7 +301,13 @@ class SkillArchiveService:
             if row["state"] in {"awaiting_upload", "uploading", "queued"}:
                 values.update(state="cancelled", error_code="SKILL_IMPORT_CANCELLED", finished_at=db_now(c))
             c.execute(update(s.skill_imports).where(s.skill_imports.c.id == id).values(**values))
-            self.admin.audit(c, p, "skill.archive.delete", id, "requested")
+            audit.record(
+                c,
+                p,
+                'skill.archive.delete',
+                id,
+                'requested',
+            )
             return self.metadata(self.row(c, p.org_id, id))
 
     def gc(self, org, limit=20):

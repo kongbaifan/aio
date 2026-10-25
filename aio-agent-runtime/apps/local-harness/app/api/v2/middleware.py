@@ -8,6 +8,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
 from ...platform_errors import PlatformError
+from ...observability.audit import trace_scope
 from ...runtime.actions import strict_json
 
 
@@ -33,7 +34,11 @@ class RequestBoundary:
             # No raw legacy terminal WebSocket is mounted in platform mode.
             await self.app(scope, receive, send)
             return
-        request_id = str(uuid4())
+        request_id = uuid4()
+        with trace_scope(request_id.hex):
+            await self.http(scope, receive, send, str(request_id))
+
+    async def http(self, scope, receive, send, request_id):
         scope.setdefault("state", {})["request_id"] = request_id
 
         async def secured_send(message):

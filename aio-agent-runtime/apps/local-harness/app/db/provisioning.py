@@ -64,13 +64,31 @@ def grant_runtime_access(connection, role: str) -> None:
                 sql.SQL(privileges), sql.Identifier(table.name), sql.Identifier(role)
             )
         )
-    # Financial scope/subject bindings are immutable to the runtime role, including administrators.
+    # Refresh removes stale mutation privileges as well as granting the current minimum.
+    for name in append_only:
+        cursor.execute(
+            sql.SQL("REVOKE UPDATE, DELETE ON {} FROM {}").format(sql.Identifier(name), sql.Identifier(role))
+        )
+        cursor.execute(
+            sql.SQL("REVOKE UPDATE ({}) ON {} FROM {}").format(
+                sql.SQL(", ").join(sql.Identifier(column.name) for column in s.metadata.tables[name].columns),
+                sql.Identifier(name), sql.Identifier(role),
+            )
+        )
+    # Financial bindings and outbox payloads are immutable even to platform administrators.
     for table, columns in (
         (s.budget_pools, "hard_limit, reserved, consumed, revision"),
         (s.budget_allocations, "reserved, consumed"),
+        (s.outbox, "delivered_at, attempts, next_attempt_at, last_error_code, lease_owner, leased_until"),
     ):
         cursor.execute(
             sql.SQL("REVOKE UPDATE, DELETE ON {} FROM {}").format(sql.Identifier(table.name), sql.Identifier(role))
+        )
+        cursor.execute(
+            sql.SQL("REVOKE UPDATE ({}) ON {} FROM {}").format(
+                sql.SQL(", ").join(sql.Identifier(column.name) for column in table.columns),
+                sql.Identifier(table.name), sql.Identifier(role),
+            )
         )
         cursor.execute(
             sql.SQL("GRANT UPDATE ({}) ON {} TO {}").format(
