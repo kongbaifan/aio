@@ -208,7 +208,9 @@ def test_archive_outage_never_blocks_business_and_is_reported_only_as_backlog(sc
     assert outcome["state"] == "succeeded" and len(sink.operations) == 1  # authorized dispatch still ran
     run = t["service"].get_run(t["alice"], t["run_id"])
     sessions = t["service"].list_sessions(t["alice"])
-    assert "AUDIT_ARCHIVE" not in json.dumps([run, sessions], default=str)
+    events, _ = t["service"].read_events(t["alice"], t["run_id"], 0)  # SSE replay source
+    assert events and events[-1]["kind"] == "run.completed"
+    assert "AUDIT_ARCHIVE" not in json.dumps([run, sessions, events], default=str)
     status = archive.backlog()
     assert status["code"] == "AUDIT_ARCHIVE_BACKLOG" and status["pending"] == len(facts(t))
     assert status["retrying"] >= 1 and status["errors"] == {"ARCHIVE_UNAVAILABLE": status["retrying"]}
