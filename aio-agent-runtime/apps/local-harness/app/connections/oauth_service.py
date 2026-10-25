@@ -10,6 +10,8 @@ from sqlalchemy import select, insert, update
 
 from ..auth.principal import Principal
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..platform_errors import PlatformError
 from ..policy.repository import current_facts, db_now
 from ..runtime.actions import canonical_digest
@@ -199,7 +201,14 @@ class OAuthService:
                 .where(s.mcp_oauth_attempts.c.id == id)
                 .values(state="authorizing", state_hash=result["state_hash"])
             )
-            self.connections.admin.audit(c, p, "mcp.oauth.authorize", conn["id"], "authorizing", {"flow_id": str(id)})
+            audit.record(
+                c,
+                p,
+                'mcp.oauth.authorize',
+                conn['id'],
+                'authorizing',
+                m.OAuthAuthorized(flow_id=str(id)),
+            )
             return {
                 "flow_id": id,
                 "connection_id": conn["id"],
@@ -331,8 +340,13 @@ class OAuthService:
                 .where(s.mcp_oauth_attempts.c.id == id)
                 .values(state="completed", completed_at=db_now(c))
             )
-            self.connections.admin.audit(
-                c, p, "mcp.oauth.complete", conn["id"], "authorized", {"credential_revision": binding["revision"]}
+            audit.record(
+                c,
+                p,
+                'mcp.oauth.complete',
+                conn['id'],
+                'authorized',
+                m.CredentialActivated(credential_revision=binding['revision']),
             )
             return {"connection_id": conn["id"], "flow_id": id, "completed": True}
 

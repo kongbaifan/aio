@@ -11,6 +11,8 @@ from sqlalchemy import delete, func, insert, or_, select, update
 
 from ..admin.service import AdminService
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.provisioning import provision_tool
 from ..platform_errors import PlatformError
 from ..platform_settings import validate_endpoint, DeploymentMode
@@ -131,7 +133,13 @@ class KnowledgeService:
                     tool_id=UUID(tool["id"]),
                 )
             )
-            self.admin.audit(c, p, "knowledge.create", id, "created")
+            audit.record(
+                c,
+                p,
+                'knowledge.create',
+                id,
+                'created',
+            )
             return self.metadata(current_knowledge(c, p, id, "knowledge.read"))
 
     def list(self, p):
@@ -379,7 +387,14 @@ class KnowledgeService:
                     expires_at=db_now(c) + timedelta(minutes=15),
                 )
             )
-            self.admin.audit(c, p, "knowledge.upload.prepare", document_id, "pending", {"version_id": str(version_id)})
+            audit.record(
+                c,
+                p,
+                'knowledge.upload.prepare',
+                document_id,
+                'pending',
+                m.KnowledgeUpload(version_id=str(version_id)),
+            )
             return {"document_id": document_id, "version_id": version_id, "number": number, "state": "uploading"}
 
     def upload(self, p, version_id, data):
@@ -455,7 +470,13 @@ class KnowledgeService:
                 .where(s.knowledge_bases.c.org_id == p.org_id, s.knowledge_bases.c.id == document["knowledge_id"])
                 .values(index_revision=s.knowledge_bases.c.index_revision + 1)
             )
-            self.admin.audit(c, p, "document.visibility", id, body.visibility)
+            audit.record(
+                c,
+                p,
+                'document.visibility',
+                id,
+                body.visibility,
+            )
             return {"id": id, "visibility": body.visibility, "revision": document["revision"] + 1}
 
     def download(self, p, version_id):
@@ -508,7 +529,13 @@ class KnowledgeService:
                 .where(s.knowledge_bases.c.org_id == p.org_id, s.knowledge_bases.c.id == row["knowledge_id"])
                 .values(index_revision=s.knowledge_bases.c.index_revision + 1)
             )
-            self.admin.audit(c, p, "document.delete", id, "access_revoked")
+            audit.record(
+                c,
+                p,
+                'document.delete',
+                id,
+                'access_revoked',
+            )
             return {"id": id, "state": "deleting", "access_revoked": True}
 
     def purge(self, org, limit=10):
@@ -636,7 +663,13 @@ class KnowledgeService:
                     org_id=p.org_id, id=id, name=body.name, model=body.model, config=config, digest=digest
                 )
             )
-            self.admin.audit(c, p, "embedding.model.create", id, "published")
+            audit.record(
+                c,
+                p,
+                'embedding.model.create',
+                id,
+                'published',
+            )
             return {"id": id, "name": body.name, "model": body.model, "config": config, "digest": digest}
 
     def embedding_models(self, p):

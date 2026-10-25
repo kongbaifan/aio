@@ -12,6 +12,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..auth.principal import Principal
 from ..billing import budgets as shared_budgets
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.engine import Database
 from ..platform_errors import PlatformError
 from ..platform_settings import PlatformSettings, WorkerSettings
@@ -41,24 +43,6 @@ class PlatformService:
         c.execute(
             insert(s.resources).values(
                 id=id, org_id=principal.org_id, owner_id=principal.user_id, kind=kind, classification=classification
-            )
-        )
-
-    @staticmethod
-    def _audit(
-        c, principal: Principal, action: str, resource_id: UUID, outcome: str, run_id: UUID | None = None
-    ) -> None:
-        c.execute(
-            insert(s.audit).values(
-                id=uuid4(),
-                org_id=principal.org_id,
-                actor_id=principal.user_id,
-                service_actor_id=principal.service_actor_id,
-                run_id=run_id,
-                action=action,
-                resource_id=resource_id,
-                outcome=outcome,
-                metadata={},
             )
         )
 
@@ -112,7 +96,13 @@ class PlatformService:
             id = uuid4()
             self._resource(c, principal, id, "project")
             c.execute(insert(s.projects).values(org_id=principal.org_id, id=id, name=name))
-            self._audit(c, principal, "project.create", id, "created")
+            audit.record(
+                c,
+                principal,
+                'project.create',
+                id,
+                'created',
+            )
             return {"id": id, "name": name, "revision": 0}
 
     def list_projects(self, principal: Principal, *, after: UUID | None = None, limit: int = 50) -> list[dict]:
@@ -181,7 +171,13 @@ class PlatformService:
                     title=title,
                 )
             )
-            self._audit(c, principal, "session.create", id, "created")
+            audit.record(
+                c,
+                principal,
+                'session.create',
+                id,
+                'created',
+            )
             return {
                 "id": id,
                 "project_id": project_id,
@@ -524,7 +520,14 @@ class PlatformService:
             shared_budgets.reserve(c, principal.org_id, pools, reserve, run_id=run_id)
             c.execute(insert(s.jobs).values(org_id=principal.org_id, id=uuid4(), run_id=run_id, not_before=now))
             self._event(c, principal.org_id, run_id, "run.queued", {"state": "queued"})
-            self._audit(c, principal, "run.create", run_id, "queued", run_id)
+            audit.record(
+                c,
+                principal,
+                'run.create',
+                run_id,
+                'queued',
+                run_id=run_id,
+            )
             c.execute(
                 update(s.idempotency_keys)
                 .where(
@@ -808,7 +811,14 @@ class PlatformService:
                     )
                 )
             self._event(c, principal.org_id, run_id, "run." + target, {"state": target})
-            self._audit(c, principal, "run.cancel", run_id, target, run_id)
+            audit.record(
+                c,
+                principal,
+                'run.cancel',
+                run_id,
+                target,
+                run_id=run_id,
+            )
             return {"run_id": run_id, "state": target}
 
     def transition_run(self, principal: Principal, run_id: UUID, generation: int, target: str) -> dict:
@@ -844,7 +854,7 @@ class PlatformService:
         if (action.org_id, action.actor_user_id, action.run_id) != (principal.org_id, principal.user_id, run_id):
             raise PlatformError("ACTION_SCOPE_DENIED", "Action does not match the current run identity", 403)
         with self.database.transaction(principal) as c:
-            current_facts(c, principal, lock=True)
+            facts = current_facts(c, principal, lock=True)
             run = self._run(c, principal, run_id, lock=True)
             require_generation(run["generation"], generation)
             require_resource(c, principal, run["project_id"], "project.write")
@@ -938,7 +948,20 @@ class PlatformService:
                         "action_digest": action.digest,
                     },
                 )
-            self._audit(c, principal, "tool.planned", invocation_id, state, run_id)
+            audit.record(
+                c,
+                principal,
+                'tool.planned',
+                invocation_id,
+                state,
+                m.ToolPlanned(tool_version_id=action.tool_version_id, action_digest=action.digest),
+                run_id=run_id,
+                decision="approval_required" if tool["risk"] == "R2" else "allow",
+                reason_code="APPROVAL_REQUIRED" if tool["risk"] == "R2" else "ALLOWED",
+                policy_revision=facts.policy_revision,
+                subject_revision=0,
+                risk_class=tool["risk"],
+            )
             return {
                 "invocation_id": invocation_id,
                 "state": state,
@@ -982,7 +1005,7 @@ class PlatformService:
                 .mappings()
                 .one()
             )
-            c.execute(
+            invocation = c.execute(
                 select(s.invocations).where(s.invocations.c.id == info["invocation_id"]).with_for_update()
             ).mappings().one()
             approval = (
@@ -1027,7 +1050,25 @@ class PlatformService:
             self._event(
                 c, principal.org_id, run["id"], "approval.resolved", {"approval_id": str(approval_id), "state": target}
             )
-            self._audit(c, principal, "approval.decide", approval_id, target, run["id"])
+            audit_id = uuid4()
+            audit.record(
+                c,
+                principal,
+                'approval.decide',
+                approval_id,
+                target,
+                m.ApprovalDecided(invocation_id=approval["invocation_id"], requested_by=approval["requested_by"], requires_different_actor=approval["requires_different_actor"], action_digest=digest),
+                run_id=run['id'],
+                decision="allow",
+                reason_code="ALLOWED",
+                policy_revision=facts.policy_revision,
+                subject_revision=approval["revision"] + 1,
+                risk_class=invocation["risk_class"],
+                event_id=audit_id,
+            )
+            audit.require_recorded(
+                c, principal, "approval.decide", approval_id, event_id=audit_id, run_id=run["id"]
+            )
         # Persist expiry before returning the error; raising inside the transaction would roll it back.
         if pending_error:
             raise pending_error
@@ -1159,7 +1200,13 @@ class PlatformService:
                 .where(s.resources.c.org_id == principal.org_id, s.resources.c.id == id)
                 .values(revision=resource.revision + 1)
             )
-            self._audit(c, principal, "session.rename", id, "renamed")
+            audit.record(
+                c,
+                principal,
+                'session.rename',
+                id,
+                'renamed',
+            )
             return {"id": id, "title": name, "revision": resource.revision + 1}
 
     def archive_session(self, principal: Principal, id: UUID, expected_revision: int) -> dict:
@@ -1184,5 +1231,11 @@ class PlatformService:
                 .where(s.resources.c.org_id == principal.org_id, s.resources.c.id == id)
                 .values(status="archived", revision=resource.revision + 1)
             )
-            self._audit(c, principal, "session.archive", id, "archived")
+            audit.record(
+                c,
+                principal,
+                'session.archive',
+                id,
+                'archived',
+            )
             return {"id": id, "archived": True}

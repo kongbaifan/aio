@@ -11,6 +11,8 @@ from sqlalchemy import delete, insert, select, update, or_
 
 from ..auth.principal import Principal
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..platform_errors import PlatformError
 from ..policy.repository import db_now
 from ..runtime.actions import canonical_digest, strict_json
@@ -420,13 +422,13 @@ class KnowledgeJobs:
                 .where(s.knowledge_jobs.c.id == job["id"])
                 .values(state="ready", phase="publish", finished_at=now, lease_expires_at=now)
             )
-            self.knowledge.admin.audit(
+            audit.record(
                 c,
                 self.principal(job),
-                "knowledge.version.publish",
-                document["id"],
-                "ready",
-                {"version_id": str(version["id"]), "chunks": len(chunks)},
+                'knowledge.version.publish',
+                document['id'],
+                'ready',
+                m.KnowledgePublished(version_id=str(version['id']), chunks=len(chunks)),
             )
             return {"id": job["id"], "state": "ready", "version_id": version["id"]}
 

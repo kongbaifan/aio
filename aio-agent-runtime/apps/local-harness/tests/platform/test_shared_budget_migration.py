@@ -16,14 +16,27 @@ from sqlalchemy import Insert, Select, Update, create_engine, func, insert, sele
 from app.auth.principal import Principal
 from app.billing import budgets as shared_budgets
 from app.db import schema as s
+from app.db import schema_v12
+from app.db import schema_v13 as v13  # 0013 binds to these exact Table objects
 from app.db.engine import Database
 from app.db.provisioning import provision_agent, provision_budget, provision_identity
 from app.runtime.service import PlatformService
+from app.observability import audit
 from knowledge_fixtures import base, upload, knowledge_platform
 
 
 @pytest.fixture
-def legacy_budget_database(postgres, platform_settings, tmp_path):
+def legacy_budget_database(postgres, platform_settings, tmp_path, monkeypatch):
+    # This fixture creates pre-v14 facts with the OLD writer, not the current audit schema.
+    # The real v12 -> v13 migration and its original rows remain completely unmocked.
+    def legacy_audit(c, p, action, resource_id, outcome, metadata=None, *, run_id=None, **context):
+        c.execute(insert(schema_v12.audit).values(
+            id=uuid4(), org_id=p.org_id, actor_id=p.user_id, service_actor_id=p.service_actor_id,
+            action=action, resource_id=resource_id, outcome=outcome, run_id=run_id,
+            metadata=metadata.model_dump(mode="json") if metadata is not None else {},
+        ))
+
+    monkeypatch.setattr(audit, "record", legacy_audit)
     _, parent, _ = postgres
     name = "aio_budget_upgrade_" + secrets.token_hex(6)
     engine = database = None
@@ -136,12 +149,12 @@ def _reads_organization_ids(statement):
     if not isinstance(statement, Select):
         return False
     froms = statement.get_final_froms()
-    return len(froms) == 1 and froms[0] is s.organizations and [c.name for c in statement.selected_columns] == ["id"]
+    return len(froms) == 1 and froms[0] is v13.organizations and [c.name for c in statement.selected_columns] == ["id"]
 
 
 def _credits_pool(statement):
     """The id of the pool a ``reserved`` increment targets, or None."""
-    if isinstance(statement, Update) and statement.table is s.budget_pools:
+    if isinstance(statement, Update) and statement.table is v13.budget_pools:
         return _written(statement).get("id_1")
     return None
 
@@ -173,7 +186,7 @@ def _perturbed_projection(rewrite):
             return getattr(self._connection, name)
 
         def execute(self, statement, *args, **kwargs):
-            if isinstance(statement, Insert) and statement.table is s.budget_pools:
+            if isinstance(statement, Insert) and statement.table is v13.budget_pools:
                 written = _written(statement)
                 if written.get("department_id") is None:
                     pools["organization"] = written["id"]
@@ -209,7 +222,7 @@ def _second_organization(t):
 def _assert_refused_without_losing_facts(t, message):
     """A refusal must abort the whole upgrade and leave every original charge fact intact."""
     with pytest.raises(RuntimeError, match=message) as error:
-        command.upgrade(t["config"], "head")
+        command.upgrade(t["config"], "0013_shared_budgets")
     assert "refusing" in str(error.value)
     with t["admin"].connect() as c:
         assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0012_skill_imports"
@@ -234,7 +247,7 @@ def test_migration_refuses_a_projection_missing_one_organizations_pool(legacy_bu
     def rewrite(statement, pools):
         # Drop only the second organization's pool. It has no holds, so no allocation
         # references it and the omission cannot surface as a foreign key error instead.
-        if isinstance(statement, Insert) and statement.table is s.budget_pools:
+        if isinstance(statement, Insert) and statement.table is v13.budget_pools:
             written = _written(statement)
             if written["org_id"] == other and written.get("department_id") is None:
                 return None
@@ -260,7 +273,7 @@ def test_migration_refuses_a_pool_count_that_disagrees_with_the_organization_cou
         # Filter the backfill's source read exactly the way row level security would, while
         # _reconcile's own COUNT(*) still sees the real table.
         if _reads_organization_ids(statement):
-            return statement.where(s.organizations.c.id != other)
+            return statement.where(v13.organizations.c.id != other)
         return statement
 
     with _perturbed_projection(rewrite):
@@ -275,7 +288,7 @@ def test_migration_refuses_an_opening_total_that_disagrees_with_recorded_persona
     t = legacy_budget_database
 
     def rewrite(statement, pools):
-        if isinstance(statement, Insert) and statement.table is s.budget_pools:
+        if isinstance(statement, Insert) and statement.table is v13.budget_pools:
             written = _written(statement)
             if written.get("department_id") is None and written["opening_consumed"] > 0:
                 # Both directions stay inside the pool's own amounts CHECK constraint, so the
@@ -298,7 +311,7 @@ def test_migration_refuses_an_outstanding_hold_left_without_an_organization_scop
         # Drop the organization-pool allocation only. The pool's reserved total is still
         # incremented, so the hold looks funded while no allocation scopes it: the failure has
         # to be caught by the per-subject equality, not by the reserved-sum comparison.
-        if isinstance(statement, Insert) and statement.table is s.budget_allocations:
+        if isinstance(statement, Insert) and statement.table is v13.budget_allocations:
             if _written(statement)["pool_id"] == pools["organization"]:
                 return None
         return statement
@@ -312,7 +325,7 @@ def test_migration_refuses_a_department_pool_that_no_allocation_supports(legacy_
     t = legacy_budget_database
 
     def rewrite(statement, pools):
-        if isinstance(statement, Insert) and statement.table is s.budget_allocations:
+        if isinstance(statement, Insert) and statement.table is v13.budget_allocations:
             if _written(statement)["pool_id"] in pools["departments"]:
                 return None
         # Drop the matching reserved increment as well, leaving reserved == 0 == the sum of the
@@ -332,7 +345,7 @@ def test_migration_refuses_fabricated_historical_departmental_consumption(legacy
     t = legacy_budget_database
 
     def rewrite(statement, pools):
-        if isinstance(statement, Insert) and statement.table is s.budget_pools:
+        if isinstance(statement, Insert) and statement.table is v13.budget_pools:
             written = _written(statement)
             if written.get("department_id") is not None:
                 # Attribute Alice's real personal spend to her department. Organization pools are
@@ -362,7 +375,7 @@ def test_migration_preserves_original_holds_and_does_not_fabricate_past_departme
             t["billing"].start(t["alice"], call, handle=handle)
         if state != "prepared":
             t["billing"].uncertain(t["alice"], call)
-    command.upgrade(t["config"], "head")
+    command.upgrade(t["config"], "0013_shared_budgets")
     with t["admin"].connect() as c:
         assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0013_shared_budgets"
         pools = {row["department_id"]: row for row in c.execute(select(s.budget_pools)).mappings()}
@@ -403,7 +416,7 @@ def test_migration_refuses_unreconciled_balances_without_dropping_original_facts
             .values(**values)
         )
     with pytest.raises(RuntimeError, match="migration"):
-        command.upgrade(t["config"], "head")
+        command.upgrade(t["config"], "0013_shared_budgets")
     with t["admin"].connect() as c:
         assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0012_skill_imports"
         assert c.execute(text("SELECT to_regclass('aio_budget_pools')")).scalar_one() is None
@@ -465,7 +478,7 @@ def test_migration_refuses_a_row_level_security_scoped_identity_instead_of_an_em
         config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
         config.attributes["database_url"] = url
         try:
-            command.upgrade(config, "head")
+            command.upgrade(config, "0013_shared_budgets")
         except RuntimeError as error:
             assert "row level security" in str(error)
         else:
@@ -506,7 +519,7 @@ def test_migration_projects_nonzero_opening_consumption_with_an_exempt_identity(
         assert c.execute(
             text("SELECT bool_or(rolsuper OR rolbypassrls) FROM pg_roles WHERE rolname=CURRENT_USER")
         ).scalar_one()
-    command.upgrade(t["config"], "head")
+    command.upgrade(t["config"], "0013_shared_budgets")
     with t["admin"].connect() as c:
         assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0013_shared_budgets"
         pools = {row["department_id"]: row for row in c.execute(select(s.budget_pools)).mappings()}

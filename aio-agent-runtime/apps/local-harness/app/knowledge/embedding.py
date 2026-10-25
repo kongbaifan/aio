@@ -12,6 +12,7 @@ from ..billing import budgets as shared_budgets
 from ..policy.repository import current_facts, db_now
 from ..runtime.actions import canonical_digest
 from ..db import schema as s
+from ..observability import audit
 from .catalog import current_embedding, current_knowledge, current_version
 
 
@@ -529,7 +530,13 @@ class EmbeddingStore:
                 .where(s.embedding_calls.c.id == id)
                 .values(actual_charge=amount, state="succeeded" if row["result_digest"] else "resolved")
             )
-            AdminService.audit(c, p, "embedding.usage.reconcile", id, "recorded")
+            audit.record(
+                c,
+                p,
+                'embedding.usage.reconcile',
+                id,
+                'recorded',
+            )
             return {"id": id, "recorded": True}
 
 

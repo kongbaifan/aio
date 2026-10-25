@@ -12,6 +12,8 @@ from sqlalchemy import insert, select, update, func, or_
 
 from ..auth.principal import Principal
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.engine import Database
 from ..platform_errors import PlatformError
 from ..policy.repository import current_facts, db_now, require_resource, visible_resources
@@ -240,17 +242,7 @@ class ArtifactService:
             c.execute(
                 update(s.upload_slots).where(s.upload_slots.c.id == slot_id).values(state="completed", artifact_id=id)
             )
-            c.execute(
-                insert(s.audit).values(
-                    org_id=p.org_id,
-                    id=uuid4(),
-                    actor_id=p.user_id,
-                    action="artifact.upload",
-                    resource_id=id,
-                    outcome="stored",
-                    metadata={"bytes": len(data)},
-                )
-            )
+            audit.record(c, p, "artifact.upload", id, "stored", m.ArtifactUploaded(bytes=len(data)))
             return self.metadata(c.execute(select(s.artifacts).where(s.artifacts.c.id == id)).mappings().one())
 
     @staticmethod

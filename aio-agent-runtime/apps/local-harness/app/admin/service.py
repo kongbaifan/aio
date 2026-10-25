@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, insert, select, update
+from pydantic import ValidationError
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..auth.principal import Principal
 from ..connections.catalog import MCP_DRIVERS
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.engine import Database
 from ..db.provisioning import provision_agent, provision_budget, provision_model, provision_tool
 from ..platform_errors import PlatformError
@@ -43,20 +47,6 @@ class AdminService:
             if role not in roles:
                 raise PlatformError("ADMIN_FORBIDDEN", "This management action is not permitted", 403)
             yield c
-
-    @staticmethod
-    def audit(c, p: Principal, action: str, resource_id: UUID, outcome: str, metadata: dict | None = None):
-        c.execute(
-            insert(s.audit).values(
-                id=uuid4(),
-                org_id=p.org_id,
-                actor_id=p.user_id,
-                action=action,
-                resource_id=resource_id,
-                outcome=outcome,
-                metadata=metadata or {},
-            )
-        )
 
     @staticmethod
     def bump_policy(c, org_id: UUID):
@@ -228,7 +218,14 @@ class AdminService:
                 )
             )
             # Newly provisioned identities have no budget and no agent/tool access until explicitly granted.
-            self.audit(c, p, "member.create", user["id"], "created", {"role": body.role})
+            audit.record(
+                c,
+                p,
+                'member.create',
+                user['id'],
+                'created',
+                m.MemberCreated(role=body.role),
+            )
             return {
                 "user_id": user["id"],
                 "display_name": body.display_name,
@@ -283,7 +280,14 @@ class AdminService:
                     )
                     .values(revoked_at=db_now(c))
                 )
-            self.audit(c, p, "member.update", user_id, "updated", {"active": body.active, "role": body.role})
+            audit.record(
+                c,
+                p,
+                'member.update',
+                user_id,
+                'updated',
+                m.MemberUpdated(active=body.active, role=body.role),
+            )
             return {
                 "user_id": user_id,
                 "display_name": body.display_name,
@@ -349,7 +353,13 @@ class AdminService:
                 raise PlatformError("DEPARTMENT_EXISTS", "Department name is already used", 409)
             id = uuid4()
             c.execute(insert(s.departments).values(org_id=p.org_id, id=id, name=name))
-            self.audit(c, p, "department.create", id, "created")
+            audit.record(
+                c,
+                p,
+                'department.create',
+                id,
+                'created',
+            )
             return {"id": id, "name": name, "active": True, "members": []}
 
     def set_department_member(self, p: Principal, department_id: UUID, user_id: UUID, role: str | None) -> dict:
@@ -399,13 +409,13 @@ class AdminService:
                 .where(s.memberships.c.org_id == p.org_id, s.memberships.c.user_id == user_id)
                 .values(revision=s.memberships.c.revision + 1)
             )
-            self.audit(
+            audit.record(
                 c,
                 p,
-                "department.membership",
+                'department.membership',
                 department_id,
-                "removed" if role is None else "granted",
-                {"user_id": str(user_id)},
+                'removed' if role is None else 'granted',
+                m.DepartmentMembership(user_id=str(user_id)),
             )
             return {"department_id": department_id, "user_id": user_id, "role": role}
 
@@ -431,7 +441,13 @@ class AdminService:
                 .where(s.memberships.c.org_id == p.org_id, s.memberships.c.user_id.in_(affected))
                 .values(revision=s.memberships.c.revision + 1)
             )
-            self.audit(c, p, "department.status", department_id, "active" if active else "disabled")
+            audit.record(
+                c,
+                p,
+                'department.status',
+                department_id,
+                'active' if active else 'disabled',
+            )
             return {"id": department_id, "active": active}
 
     def _manageable(self, c, p: Principal, resource_id: UUID):
@@ -637,13 +653,13 @@ class AdminService:
                     .where(s.resources.c.id == resource["id"])
                     .values(revision=s.resources.c.revision + 1)
                 )
-                self.audit(
+                audit.record(
                     c,
                     p,
-                    "resource.grant",
-                    resource["id"],
-                    "granted",
-                    {"subject_type": body.subject_type, "subject_id": str(body.subject_id), "actions": sorted(granted)},
+                    'resource.grant',
+                    resource['id'],
+                    'granted',
+                    m.ResourceGrant(subject_type=body.subject_type, subject_id=str(body.subject_id), actions=tuple(sorted(granted))),
                 )
             return {"resource_id": resource_id, "granted_resources": len(resources), "revision": row["revision"] + 1}
 
@@ -662,7 +678,14 @@ class AdminService:
             c.execute(
                 update(s.resources).where(s.resources.c.id == resource_id).values(revision=s.resources.c.revision + 1)
             )
-            self.audit(c, p, "resource.grant.revoke", resource_id, "revoked", {"grant_id": str(grant_id)})
+            audit.record(
+                c,
+                p,
+                'resource.grant.revoke',
+                resource_id,
+                'revoked',
+                m.GrantRevoked(grant_id=str(grant_id)),
+            )
             return {"resource_id": resource_id, "revision": row["revision"] + 1}
 
     def options(self, p: Principal) -> dict:
@@ -745,7 +768,13 @@ class AdminService:
             model = provision_model(
                 c, org_id=p.org_id, owner_id=p.user_id, provider=body.provider, model=body.model, config=config
             )
-            self.audit(c, p, "model.version.create", UUID(model["id"]), "published")
+            audit.record(
+                c,
+                p,
+                'model.version.create',
+                UUID(model['id']),
+                'published',
+            )
             return model
 
     def tools(self, p: Principal) -> list[dict]:
@@ -828,7 +857,13 @@ class AdminService:
                 input_schema=schema,
                 config=config,
             )
-            self.audit(c, p, "tool.version.create", UUID(tool["id"]), "published")
+            audit.record(
+                c,
+                p,
+                'tool.version.create',
+                UUID(tool['id']),
+                'published',
+            )
             return tool
 
     def agents(self, p: Principal) -> list[dict]:
@@ -962,7 +997,13 @@ class AdminService:
                 instruction=body.instruction,
                 manifest=manifest,
             )
-            self.audit(c, p, "agent.version.create", id, "published")
+            audit.record(
+                c,
+                p,
+                'agent.version.create',
+                id,
+                'published',
+            )
             return {
                 "id": id,
                 "name": body.name,
@@ -985,7 +1026,13 @@ class AdminService:
                 .where(s.resources.c.id == id, s.resources.c.org_id == p.org_id)
                 .values(status=status, revision=resource["revision"] + 1)
             )
-            self.audit(c, p, "resource.status", id, status)
+            audit.record(
+                c,
+                p,
+                'resource.status',
+                id,
+                status,
+            )
             return {"id": id, "status": status, "revision": resource["revision"] + 1}
 
     @staticmethod
@@ -1057,18 +1104,13 @@ class AdminService:
                 .where(s.budget_pools.c.org_id == p.org_id, s.budget_pools.c.id == row["id"])
                 .values(hard_limit=limit, revision=expected_revision + 1)
             )
-            self.audit(
+            audit.record(
                 c,
                 p,
-                "budget.shared_limit",
-                row["id"],
-                "updated",
-                {
-                    "department_id": str(department_id) if department_id else None,
-                    "hard_limit": str(limit) if limit is not None else None,
-                    "currency": "USD",
-                    "revision": expected_revision + 1,
-                },
+                'budget.shared_limit',
+                row['id'],
+                'updated',
+                m.SharedBudgetLimit(department_id=str(department_id) if department_id else None, hard_limit=format(limit, "f") if limit is not None else None, currency='USD', revision=expected_revision + 1),
             )
             return self._pool_view(
                 {**dict(row), "hard_limit": limit, "revision": expected_revision + 1}, name, department_id
@@ -1127,13 +1169,13 @@ class AdminService:
                 id = row["id"]
             else:
                 id = provision_budget(c, org_id=p.org_id, user_id=user_id, hard_limit=limit)
-            self.audit(
+            audit.record(
                 c,
                 p,
-                "budget.limit",
+                'budget.limit',
                 id,
-                "updated",
-                {"owner_id": str(user_id), "hard_limit": str(limit), "currency": "USD"},
+                'updated',
+                m.BudgetLimit(owner_id=str(user_id), hard_limit=format(limit, "f"), currency='USD'),
             )
             return {"id": id, "owner_id": user_id, "hard_limit": str(limit), "currency": "USD"}
 
@@ -1178,8 +1220,28 @@ class AdminService:
                 ).scalar_one(),
             }
 
-    def audit_events(self, p: Principal, limit: int = 100) -> list[dict]:
+    def audit_events(
+        self, p: Principal, limit: int = 100, *, since: datetime | None = None,
+        until: datetime | None = None, before_created_at: datetime | None = None, before_id: UUID | None = None,
+    ) -> list[dict]:
         with self.transaction(p, roles=frozenset({"org_admin", "auditor"})) as c:
+            try:
+                query = m.AuditRead(
+                    row_count=0, limit=limit, since=since, until=until,
+                    before_created_at=before_created_at, before_id=before_id,
+                )
+            except ValidationError:
+                raise PlatformError("AUDIT_QUERY_INVALID", "Audit range or pagination is invalid", 422) from None
+            predicates = [s.audit.c.org_id == p.org_id]
+            if query.since is not None:
+                predicates.append(s.audit.c.created_at >= query.since)
+            if query.until is not None:
+                predicates.append(s.audit.c.created_at < query.until)
+            if query.before_created_at is not None:
+                predicates.append(or_(
+                    s.audit.c.created_at < query.before_created_at,
+                    and_(s.audit.c.created_at == query.before_created_at, s.audit.c.id > query.before_id),
+                ))
             rows = (
                 c.execute(
                     select(
@@ -1190,14 +1252,28 @@ class AdminService:
                         s.audit.c.run_id,
                         s.audit.c.outcome,
                         s.audit.c.created_at,
+                        s.audit.c.trace_id,
+                        s.audit.c.resource_kind,
+                        s.audit.c.decision,
+                        s.audit.c.reason_code,
+                        s.audit.c.policy_revision,
+                        s.audit.c.subject_revision,
+                        s.audit.c.risk_class,
+                        s.audit.c.metadata_schema,
                     )
-                    .where(s.audit.c.org_id == p.org_id)
+                    .where(*predicates)
                     .order_by(s.audit.c.created_at.desc(), s.audit.c.id)
-                    .limit(min(limit, 200))
+                    .limit(query.limit)
                 )
                 .mappings()
                 .all()
             )
+            audit_id = uuid4()
+            audit.record(
+                c, p, "audit.read", p.org_id, "read",
+                m.AuditRead(**{**query.model_dump(), "row_count": len(rows)}), event_id=audit_id,
+            )
+            audit.require_recorded(c, p, "audit.read", p.org_id, event_id=audit_id)
             # Deliberately no raw tool arguments, prompt, screenshots, error bodies or arbitrary audit metadata.
             return [dict(row) for row in rows]
 
@@ -1249,7 +1325,13 @@ class AdminService:
                 .values(state="cancel_requested", revision=s.runs.c.revision + 1)
             )
             c.execute(update(s.jobs).where(s.jobs.c.id == job["id"]).values(state="stopping"))
-            self.audit(c, p, "operation.stop", run_id, "cancel_requested")
+            audit.record(
+                c,
+                p,
+                'operation.stop',
+                run_id,
+                'cancel_requested',
+            )
             store.platform._event(
                 c, p.org_id, run_id, "run.cancel_requested", {"state": "cancel_requested", "reason": "OPERATOR_REQUEST"}
             )
@@ -1286,5 +1368,11 @@ class AdminService:
                     policy_revision=row["policy_revision"] + 1,
                 )
             )
-            self.audit(c, p, "organization.policy", p.org_id, "updated")
+            audit.record(
+                c,
+                p,
+                'organization.policy',
+                p.org_id,
+                'updated',
+            )
             return {"policy_revision": row["policy_revision"] + 1}

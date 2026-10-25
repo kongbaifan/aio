@@ -18,6 +18,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..auth.principal import Principal
 from ..billing import budgets as shared_budgets
 from ..db import schema as s
+from ..observability import audit
+from ..observability import redaction as m
 from ..db.engine import Database
 from ..platform_errors import PlatformError
 from ..platform_settings import PlatformSettings, WorkerSettings
@@ -587,7 +589,14 @@ class ExecutionStore:
                     **meta,
                 )
             )
-            self.platform._audit(c, handle.principal, "model.prepared", id, "prepared", run["id"])
+            audit.record(
+                c,
+                handle.principal,
+                'model.prepared',
+                id,
+                'prepared',
+                run_id=run['id'],
+            )
             return {"id": id, "state": "prepared", "generation": handle.generation, "definition": definition}
 
     def start_model_call(self, handle: WorkHandle, call_id: UUID) -> dict:
@@ -860,7 +869,20 @@ class ExecutionStore:
                     "approval.required",
                     {"approval_id": str(approval_id), "invocation_id": str(id), "action_digest": spec.digest},
                 )
-            self.platform._audit(c, handle.principal, "tool.planned", id, state, run["id"])
+            audit.record(
+                c,
+                handle.principal,
+                'tool.planned',
+                id,
+                state,
+                m.ToolPlanned(tool_version_id=spec.tool_version_id, action_digest=spec.digest),
+                run_id=run['id'],
+                decision="approval_required" if tool["risk"] == "R2" else "allow",
+                reason_code="APPROVAL_REQUIRED" if tool["risk"] == "R2" else "ALLOWED",
+                policy_revision=facts.policy_revision,
+                subject_revision=0,
+                risk_class=tool["risk"],
+            )
             return {"id": id, "state": state, "action_digest": spec.digest, "external_operation_key": op_key}
 
     def prepare_dispatch(self, handle: WorkHandle, checkpoint_seq: int, invocation_id: UUID) -> dict:
@@ -923,7 +945,25 @@ class ExecutionStore:
                     operation_key=inv["external_operation_key"],
                 )
             )
-            self.platform._audit(c, handle.principal, "tool.dispatch_prepared", inv["id"], "prepared", run["id"])
+            audit_id = uuid4()
+            audit.record(
+                c,
+                handle.principal,
+                'tool.dispatch_prepared',
+                inv['id'],
+                'prepared',
+                m.ToolDispatch(tool_version_id=spec.tool_version_id, action_digest=spec.digest, dispatch_id=id, generation=handle.generation),
+                run_id=run['id'],
+                decision="allow",
+                reason_code="ALLOWED",
+                policy_revision=facts.policy_revision,
+                subject_revision=inv["revision"],
+                risk_class=tool["risk"],
+                event_id=audit_id,
+            )
+            audit.require_recorded(
+                c, handle.principal, "tool.dispatch_prepared", inv["id"], event_id=audit_id, run_id=run["id"]
+            )
             return {"id": id, "state": "prepared", "target_slot": target_slot}
 
     def _current_tool(self, c, p, run, id, entry):
@@ -1049,6 +1089,19 @@ class ExecutionStore:
                 "tool.started",
                 {"invocation_id": str(inv["id"]), "dispatch_id": str(dispatch_id)},
             )
+            audit_id = uuid4()
+            audit.record(
+                c, handle.principal, "tool.dispatch_consumed", inv["id"], "dispatching",
+                m.ToolDispatch(
+                    tool_version_id=spec.tool_version_id, action_digest=spec.digest,
+                    dispatch_id=dispatch_id, generation=handle.generation,
+                ),
+                run_id=run["id"], decision="allow", reason_code="ALLOWED", policy_revision=facts.policy_revision,
+                subject_revision=inv["revision"] + 1, risk_class=tool["risk"], event_id=audit_id,
+            )
+            audit.require_recorded(
+                c, handle.principal, "tool.dispatch_consumed", inv["id"], event_id=audit_id, run_id=run["id"]
+            )
             return DispatchPermit(
                 handle,
                 dispatch_id,
@@ -1125,7 +1178,20 @@ class ExecutionStore:
                 "tool.completed" if outcome == "succeeded" else "tool.failed",
                 {"invocation_id": str(inv["id"]), "state": result_state, "result": output},
             )
-            self.platform._audit(c, handle.principal, "tool.result", inv["id"], result_state, run["id"])
+            audit.record(
+                c,
+                handle.principal,
+                'tool.result',
+                inv['id'],
+                result_state,
+                m.ToolResult(tool_version_id=UUID(inv["action"]["tool_version_id"]), action_digest=inv["action_digest"], dispatch_id=dispatch_id, generation=handle.generation, outcome_digest=digest, dispatch_outcome=outcome),
+                run_id=run['id'],
+                decision="allow",
+                reason_code="ALLOWED",
+                policy_revision=facts.policy_revision,
+                subject_revision=inv["revision"] + 1,
+                risk_class=inv["risk_class"],
+            )
             return seq
 
     @staticmethod
@@ -1305,7 +1371,14 @@ class ExecutionStore:
         self.platform._event(
             c, run["org_id"], run["id"], event, {"state": state, "reason_code": reason, "cleanup_state": cleanup}
         )
-        self.platform._audit(c, principal, "run.finalized", run["id"], state, run["id"])
+        audit.record(
+            c,
+            principal,
+            'run.finalized',
+            run['id'],
+            state,
+            run_id=run['id'],
+        )
         return {"run_id": run["id"], "state": state, "cleanup_state": cleanup}
 
     def finish(self, handle: WorkHandle, checkpoint_seq: int) -> dict:
@@ -1753,6 +1826,20 @@ class ExecutionStore:
                     resolution={"conclusion": conclusion, "evidence_ref": evidence_ref},
                 )
             )
+            unknown = [inv for inv in invs if inv["state"] == "outcome_unknown"]
+            audit_id = uuid4()
+            audit.record(
+                c, principal, "run.reconcile", run_id, "reconciled",
+                m.RunReconciled(
+                    conclusion=conclusion, resolved_invocations=len(unknown),
+                    evidence_digest=canonical_digest("aio-reconciliation-evidence-v1", evidence_ref),
+                ),
+                run_id=run_id, decision="allow", reason_code="ALLOWED", policy_revision=facts.policy_revision,
+                subject_revision=run["revision"], risk_class=max((inv["risk_class"] for inv in unknown), default=None),
+                event_id=audit_id,
+            )
+            # Clearing an unknown-effect blocker is high risk: no receipt, no state change.
+            audit.require_recorded(c, principal, "run.reconcile", run_id, event_id=audit_id, run_id=run_id)
             # A confirmed external effect does not prove the entire Agent task completed.
             result = self._terminal(
                 c,
@@ -1882,7 +1969,14 @@ class ExecutionStore:
                     price_version=str(call["model_config_id"]),
                 )
             )
-            self.platform._audit(c, principal, "model.usage_reconciled", call_id, "accounted", run["id"])
+            audit.record(
+                c,
+                principal,
+                'model.usage_reconciled',
+                call_id,
+                'accounted',
+                run_id=run['id'],
+            )
             self.platform._event(
                 c,
                 principal.org_id,
