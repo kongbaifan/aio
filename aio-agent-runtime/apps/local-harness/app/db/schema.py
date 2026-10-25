@@ -1,6 +1,6 @@
 """Current application schema; migration snapshots stay immutable."""
 
-from .schema_v14 import (
+from .schema_v15 import (
     organizations as organizations,
     users as users,
     memberships as memberships,
@@ -63,6 +63,7 @@ from .schema_v14 import (
     budget_pools as budget_pools,
     budget_allocations as budget_allocations,
     metadata as metadata,
+    ARCHIVE_KIND as ARCHIVE_KIND,
     BOOTSTRAP_TABLES as BOOTSTRAP_TABLES,
     TENANT_TABLES as TENANT_TABLES,
 )

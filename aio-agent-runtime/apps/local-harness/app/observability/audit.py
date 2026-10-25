@@ -19,6 +19,7 @@ from ..runtime.contracts import bounded_json
 from . import redaction as m
 
 _trace_id: ContextVar[str | None] = ContextVar("platform_audit_trace", default=None)
+ARCHIVE_KIND = s.ARCHIVE_KIND
 
 
 @contextmanager
@@ -155,6 +156,11 @@ def record(
                 id=id, **context.model_dump(), action=action, outcome=outcome,
                 metadata=payload, metadata_schema=action + ":v1", created_at=text("clock_timestamp()"),
             )
+        )
+        # Same transaction: a committed fact always has a delivery entry, a rolled-back one never does.
+        # The entry is only a pointer; the relay re-reads the fact itself, never a copied payload.
+        c.execute(
+            insert(s.outbox).values(org_id=principal.org_id, id=uuid4(), aggregate_id=id, kind=ARCHIVE_KIND, payload={})
         )
     except SQLAlchemyError:
         # Never echo DB messages/parameters or an upstream exception chain into an API/SSE error.

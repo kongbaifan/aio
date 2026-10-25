@@ -13,7 +13,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.auth.principal import Principal
 from app.db import schema_v13, schema_v14
-from app.observability import audit
+from app.observability import archive, audit
 from app.observability import redaction as m
 from app.platform_errors import PlatformError
 from app.policy.service import KNOWN_ACTIONS
@@ -159,3 +159,45 @@ def test_v14_does_not_mutate_historical_metadata_in_memory():
     assert not set(schema_v14.AUDIT_COLUMNS) & set(schema_v13.audit.c.keys())
     assert not set(schema_v14.OUTBOX_COLUMNS) & set(schema_v13.outbox.c.keys())
     assert {fk.target_fullname for fk in schema_v14.audit.foreign_keys} == {"aio_organizations.id"}
+
+
+def test_record_enqueues_exactly_one_pointer_after_its_fact():
+    p = Principal(uuid4(), uuid4(), 0)
+    c = CaptureConnection(p.org_id)
+    fact = audit.record(c, p, "project.create", uuid4(), "created")
+    assert len(c.writes) == 2
+    assert c.writes[1]["kind"] == "audit.archive" and c.writes[1]["aggregate_id"] == fact
+    assert c.writes[1]["payload"] == {} and c.writes[1]["org_id"] == p.org_id  # a pointer, never copied content
+
+
+def test_archive_backoff_is_monotonic_and_bounded():
+    delays = [archive.backoff_seconds(n) for n in range(1, 40)]
+    assert delays[:4] == [5, 10, 20, 40] and delays == sorted(delays) and max(delays) == 900
+
+
+def test_archive_record_is_exactly_the_typed_audit_columns_and_closed_metadata():
+    typed = set(schema_v14.audit.c.keys()) - {"id"}
+    assert set(archive.ArchiveRecord.model_fields) == typed | {"audit_id"}
+    row = {
+        "id": ID, "org_id": ID, "actor_id": ID, "service_actor_id": None, "run_id": None, "action": "member.update",
+        "resource_id": ID, "resource_kind": "member", "outcome": "updated", "decision": None, "reason_code": None,
+        "policy_revision": None, "subject_revision": None, "risk_class": None, "trace_id": None,
+        "metadata_schema": "member.update:v1", "metadata": {"role": "member", "active": True},
+        "created_at": datetime.now(timezone.utc),
+    }
+    record = archive.ArchiveRecord.from_row(row)
+    assert record.idempotency_key == f"{ID}:{ID}"
+    for bad in ({"metadata_schema": "legacy"}, {"outcome": "rewritten"}, {"action": "free.text"},
+                {"metadata": {"role": "member", "active": True, "note": "synthetic-secret-marker"}}):
+        with pytest.raises((ValueError, ValidationError)) as error:
+            archive.ArchiveRecord.from_row({**row, **bad})
+        assert "synthetic-secret-marker" not in str(error.value)
+
+
+def test_sink_error_codes_are_a_closed_vocabulary_and_relay_bounds_are_checked():
+    assert archive.ArchiveDeliveryError("synthetic-secret-marker").code == "ARCHIVE_DELIVERY_FAILED"
+    assert archive.ArchiveDeliveryError("ARCHIVE_REJECTED").code == "ARCHIVE_REJECTED"
+    for kwargs in ({"owner": "bad owner"}, {"owner": ""}, {"timeout_seconds": 60, "lease_seconds": 60},
+                   {"batch_size": 0}, {"org_id": "not-a-uuid"}):
+        with pytest.raises(ValueError):
+            archive.AuditRelay(None, **{"org_id": ID, "owner": "relay-1", "sink": None, **kwargs})
