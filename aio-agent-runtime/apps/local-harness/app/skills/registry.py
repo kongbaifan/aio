@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 # 关键词只用来在清单里给某几条打「可能相关」的提示，不决定模型能看到什么
@@ -195,6 +195,11 @@ class SkillRegistry:
         cleaned = (path or "").strip().replace("\\", "/").lstrip("/")
         if not cleaned or "\x00" in cleaned:
             raise ValueError("path 不能为空")
+        # 盘符路径（C:/x、C:x）在 Windows 上 join 后直接跳出 root，被下面的边界检查拦住；
+        # 在 POSIX 上它只是一个名叫 "C:" 的相对目录，会落到「找不到」。
+        # 这里按 Windows 语义先判一次，保证所有平台上都是越界而不是找不到。
+        if PureWindowsPath(cleaned).drive:
+            raise ValueError("path 越出 skill 目录边界")
         _reject_sensitive_name(cleaned)
 
         escaped = False
