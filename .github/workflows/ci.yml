@@ -50,6 +50,9 @@ jobs:
           # 可选 MCP 入口的依赖：不装的话 test_mcp_server.py 会被 importorskip
           # 整个跳过，等于 MCP 旁路的策略测试没进门禁。
           pip install -r apps/local-harness/requirements-mcp.txt
+          # tests/platform 里的 OAuth/stdio 契约测试要拿真实网关的 digest 做对比，
+          # 不装的话直接 ModuleNotFoundError: aio_connector_gateway。
+          pip install -e services/connector-gateway
           pip install ruff==0.16.0
 
       - name: 检查密钥没有进版本库
