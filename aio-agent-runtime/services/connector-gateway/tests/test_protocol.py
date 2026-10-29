@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import json
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -134,3 +136,21 @@ def test_resource_links_are_data_not_http_requests_and_binaries_are_explicitly_u
     assert value["content"][0]["automatically_fetched"] is False
     assert value["omitted_binary"][0]["reason"] == "BINARY_ARTIFACT_IMPORT_UNAVAILABLE"
     assert TOKEN_A not in str(value)
+
+
+@pytest.mark.parametrize("encode", [
+    lambda v: v, lambda v: quote(v, safe=""), lambda v: base64.b64encode(v.encode()).decode(),
+    lambda v: base64.urlsafe_b64encode(v.encode()).decode().rstrip("="),
+], ids=["raw", "percent", "base64", "base64url"])
+def test_echoed_credential_is_removed_in_every_encoding_a_server_may_use(encode):
+    credential = TOKEN_A + "/+?&="
+    echoed = encode(credential)
+    value = normalize_result(
+        {
+            "content": [{"type": "text", "text": f"Authorization: Bearer {echoed}"}],
+            "structuredContent": {"url": f"https://api.example.test/?token={echoed}", echoed: "as key"},
+        },
+        credential,
+    )
+    rendered = json.dumps(value)
+    assert echoed not in rendered and credential not in rendered and "[credential-redacted]" in rendered

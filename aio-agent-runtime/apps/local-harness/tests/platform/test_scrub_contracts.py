@@ -84,3 +84,65 @@ def test_mark_must_be_boolean_true_and_is_frozen_into_the_tool_digest():
 
 def test_a_marked_root_masks_everything():
     assert x.scrub({"a": 1}, sensitive=x.sensitive_paths({"type": "object", "x-aio-sensitive": True})) == x.MASK
+
+
+@pytest.fixture
+def registered():
+    value = MARKER + "-registered"
+    x.register_material(value, "tiny")
+    yield value
+    x.forget_material(value, "tiny")
+
+
+def test_registered_material_is_scrubbed_everywhere_without_being_passed(registered):
+    out = x.scrub({"log": f"token={quote(registered, safe='')}", "k": registered})
+    assert registered not in json.dumps(out) and quote(registered, safe="") not in json.dumps(out)
+    assert "tiny" not in x.known_material()  # too short to be unambiguous
+    with pytest.raises(x.SensitiveLeak):
+        x.assert_clean(json.dumps({"nested": [registered]}))
+
+
+def test_log_filter_removes_material_from_messages_args_and_tracebacks(registered, caplog):
+    import logging
+
+    logger = logging.getLogger("aio.test.scrub")
+    x.install_log_filter(logger)
+    x.install_log_filter(logger)  # idempotent
+    assert sum(isinstance(f, x.MaterialLogFilter) for f in logger.filters) == 1
+    with caplog.at_level(logging.WARNING, logger="aio.test.scrub"):
+        logger.warning("upstream said %s", registered)
+        try:
+            raise RuntimeError(f"Bearer {registered}")
+        except RuntimeError:
+            logger.exception("driver failed")
+    rendered = caplog.text + "".join(r.getMessage() + (r.exc_text or "") for r in caplog.records)
+    assert registered not in rendered and x.MATERIAL_MASK in rendered
+
+
+def test_process_secrets_include_service_tokens_and_database_password():
+    class Settings:
+        oidc_client_secret = "oidc-" + MARKER
+        manager_token = "manager-" + MARKER
+        connector_token = None
+        database_url = "postgresql+psycopg://runtime:db-pass-" + MARKER + "@127.0.0.1:5432/x"
+
+    try:
+        x.register_process_secrets(Settings)
+        assert {"oidc-" + MARKER, "manager-" + MARKER, "db-pass-" + MARKER} <= x.known_material()
+    finally:
+        x.forget_material("oidc-" + MARKER, "manager-" + MARKER, "db-pass-" + MARKER)
+
+
+def test_audit_writer_refuses_registered_material_instead_of_storing_it(registered):
+    from uuid import uuid4
+
+    from app.auth.principal import Principal
+    from app.observability import audit
+    from app.platform_errors import PlatformError
+    from test_audit_contracts import CaptureConnection
+
+    p = Principal(uuid4(), uuid4(), 0, service_actor_id=registered)
+    c = CaptureConnection(p.org_id)
+    with pytest.raises(PlatformError) as error:
+        audit.record(c, p, "project.create", uuid4(), "created")
+    assert error.value.code == "AUDIT_METADATA_INVALID" and c.writes == [] and registered not in str(error.value)

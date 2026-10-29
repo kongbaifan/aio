@@ -4,6 +4,7 @@ import asyncio
 import signal
 
 from app.db.engine import Database
+from app.observability import scrub
 from app.platform_settings import DeploymentMode, WorkerSettings
 from app.runtime.execution import ExecutionStore
 from app.runtime.model_client import ModelFactory
@@ -32,6 +33,7 @@ from app.knowledge.worker import KnowledgeWorker
 async def main():
     settings = WorkerSettings.from_env()
     db = Database(settings.database_url)
+    scrub.register_process_secrets(settings)
     await asyncio.to_thread(db.verify_runtime_role)
     factory = ModelFactory(
         approved_origins=settings.approved_model_origins,

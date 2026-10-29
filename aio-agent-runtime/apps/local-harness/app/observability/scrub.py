@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Iterable, Mapping
+import threading
 from urllib.parse import quote
 
 SENSITIVE = "x-aio-sensitive"
@@ -28,6 +29,77 @@ _MAX_DEPTH = 32
 
 class SensitiveLeak(Exception):
     """A sink received known secret material after scrubbing: refuse, never write it."""
+
+
+_registry_lock = threading.Lock()
+_registry: frozenset[str] = frozenset()
+
+
+def register_material(*values: str | None) -> None:
+    """Record credentials this process holds (service tokens, resolved model keys) for every scrub.
+
+    Values never leave the process; only ones long enough to be unambiguous are kept.
+    """
+    global _registry
+    keep = {v for v in values if isinstance(v, str) and len(v) >= MIN_MATERIAL_LENGTH}
+    if keep:
+        with _registry_lock:
+            _registry = _registry | keep
+
+
+def known_material() -> frozenset[str]:
+    return _registry
+
+
+class MaterialLogFilter:
+    """Logging filter: known material is removed from the rendered message and exception text."""
+
+    def filter(self, record) -> bool:
+        if not _registry:
+            return True
+        message = scrub(record.getMessage())
+        record.msg, record.args = message, ()
+        if record.exc_info:
+            import traceback
+
+            record.exc_text = scrub("".join(traceback.format_exception(*record.exc_info)))
+            record.exc_info = None
+        return True
+
+
+SETTINGS_SECRETS = (
+    "oidc_client_secret", "manager_token", "manager_control_token", "connector_token", "connector_control_token",
+)
+
+
+def register_process_secrets(settings) -> None:
+    """API/Worker entry points: register every service credential the process was configured with."""
+    from sqlalchemy.engine import make_url
+
+    values = [getattr(settings, name, None) for name in SETTINGS_SECRETS]
+    try:
+        values.append(make_url(settings.database_url).password)
+    except Exception:
+        pass
+    register_material(*values)
+    install_log_filter()
+
+
+def install_log_filter(logger=None) -> None:
+    """Attach to every handler of the root (or given) logger, plus the logger itself; idempotent."""
+    import logging
+
+    target = logger or logging.getLogger()
+    for owner in (target, *target.handlers):
+        if not any(isinstance(f, MaterialLogFilter) for f in owner.filters):
+            owner.addFilter(MaterialLogFilter())
+
+
+def forget_material(*values: str) -> None:
+    """Drop rotated/test credentials; normal service code never needs this."""
+    global _registry
+    with _registry_lock:
+        _registry = _registry - set(values)
 
 
 def validate_mark(schema: Mapping) -> None:
@@ -103,9 +175,35 @@ def _matches(path: tuple[str, ...], patterns: frozenset[tuple[str, ...]]) -> boo
     )
 
 
+def marked_values(value, sensitive: frozenset[tuple[str, ...]]) -> list[str]:
+    """String leaves at marked paths, so a tool echoing a marked argument back is caught too."""
+    found: list[str] = []
+
+    def walk(item, path, depth):
+        if depth > _MAX_DEPTH:
+            return
+        inside = _matches(path, sensitive)
+        if isinstance(item, str):
+            if inside:
+                found.append(item)
+        elif isinstance(item, Mapping):
+            for k, v in item.items():
+                walk(v, (*path, str(k)), depth + 1)
+        elif isinstance(item, (list, tuple)):
+            for v in item:
+                walk(v, (*path, "*"), depth + 1)
+
+    if sensitive:
+        walk(value, (), 0)
+    return found
+
+
 def scrub(value, *, sensitive: frozenset[tuple[str, ...]] = frozenset(), secrets: Iterable[str] = ()):
-    """Return a copy with marked paths masked and known secret material removed from all strings."""
-    forms = material_forms(secrets)
+    """Return a copy with marked paths masked and known secret material removed from all strings.
+
+    The process registry (``register_material``) is always included in ``secrets``.
+    """
+    forms = material_forms((*secrets, *known_material()))
 
     def text(item: str) -> str:
         for form in forms:
@@ -129,8 +227,8 @@ def scrub(value, *, sensitive: frozenset[tuple[str, ...]] = frozenset(), secrets
     return walk(value, (), 0)
 
 
-def assert_clean(serialized: str, secrets: Iterable[str]) -> None:
+def assert_clean(serialized: str, secrets: Iterable[str] = ()) -> None:
     """Refuse (never repair) when known material survived scrubbing: it means a layer has a gap."""
-    for form in material_forms(secrets):
+    for form in material_forms((*secrets, *known_material())):
         if form in serialized:
             raise SensitiveLeak("Known secret material reached a sink")

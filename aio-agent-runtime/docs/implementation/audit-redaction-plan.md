@@ -175,7 +175,7 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 
 ## 6. 执行与证据清单
 
-> 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`），已合入 master（kongbaifan/aio#1）。Slice B 的 relay 已落地（`app/observability/archive.py`、v15、`tests/platform/test_audit_relay.py`），只验收 fake sink，未接真实适配器/进程。Slice C 未开始。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
+> 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`），已合入 master（kongbaifan/aio#1）。Slice B 的 relay 已落地（`app/observability/archive.py`、v15、`tests/platform/test_audit_relay.py`），只验收 fake sink，未接真实适配器/进程。Slice C 出口脱敏已落地（`app/observability/scrub.py`、`tests/platform/test_scrub_*.py`）。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
 
 - [x] v14 迁移、审计扩列、outbox 投递簿记与 runtime 最小权限。
   **实际**：真 PG 从 `0013_shared_budgets` 升级、legacy 行逐字段不变、新自由 metadata 被拒、仅 legacy 时可降级、存在结构化行时降级拒绝；runtime 对审计 UPDATE/DELETE 及 outbox `payload`/`kind`/`aggregate_id` UPDATE、DELETE 均为 `42501`，六个簿记列可改；启动校验对多授的审计列 UPDATE 报错（负控）。4 KiB 上限实测按未压缩值计算，可压缩大字段同样被拒。实施中发现并修复：CHECK 字符串中的 `':v1'` 被 SQLAlchemy 当作绑定参数渲染为 `'NULL'`，导致全部结构化写入失败；已加不依赖 PG 的 DDL 渲染回归用例。
@@ -192,8 +192,8 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 - [x] 两类故障不混淆：归档中断不阻断只读请求与已获权动作。
   **实际**：sink 全程 `ARCHIVE_UNAVAILABLE` 时，Worker 完成含已获权 dispatch 的 Run（外部 sink 恰好一次）、Run 详情与会话列表正常，业务响应中无 `AUDIT_ARCHIVE*`；`backlog()` 为 `AUDIT_ARCHIVE_BACKLOG`，待投递数等于 PG 事实数，错误计数只有 `ARCHIVE_UNAVAILABLE`；恢复后全部事实补投、无内容泄漏；PG 审计写失败时为 `AUDIT_SINK_UNAVAILABLE` 且不产生指针；`serve()` 的告警日志含码与计数、不含 sink 异常文本。**未做**：只读 API 覆盖了 Run 详情、会话列表与事件回放（SSE 源），未覆盖知识检索；backlog 未导出为指标，没有管理 API；`run_worker.py` 未启动 relay（无真实适配器可接）。
   **证明**：sink 全程不可用时，只读 API（Run 列表/事件回放/知识检索）与已获权高风险 dispatch 仍成功，`AUDIT_ARCHIVE_BACKLOG` 只出现在指标/告警而不进业务响应；同一用例断言 PG 审计行仍然写入且 backlog 计数增长。对应 ECASE-34 后半「不混淆两种故障」。
-- [ ] 脱敏边界：五个出口、schema 级标记、正文不可达。
-  **实际（仅审计出口）**：审计 metadata 封闭类型 + 真实 approved Run 的事实不含 prompt/回答/参数值；`x-aio-sensitive`、统一 `scrub()`、SSE/错误/relay 出口与替换 `_SECRET_PATTERN`、网关 `replace` 均未做（Slice C）。
+- [x] 脱敏边界：五个出口、schema 级标记、正文不可达。
+  **实际**：`observability/scrub.py` 统一实现，结构规则（`x-aio-sensitive`，跟随引用与组合）+ 已知密钥规则（本次调用的标记值 + 进程登记凭据，四种编码）。真 PG：工具把标记参数以原文/percent/base64 回显、把登记的服务凭据回显、在异常里带出两者时，dispatch/invocation 结果、检查点 tool 消息、SSE 事件、会话消息、Run 结果与错误码、审计行均无任何形态，日志也没有；未标记的 `sk-…` 样值原样保留（证明无前缀启发式）；发布后摘掉标记使 Run 以 `TOOL_VERSION_CHANGED` 失败且未派发。审计与归档对已知密钥拒绝而非替换。网关 `replace` 改为四种编码。变异测试 9 项全部杀死（其中编码类 3 项是在把 marker 改为含 `/+?=` 之后才杀死的）。**偏差/未做**：计划要求替换的 `llm/openai_compatible.py` `_SECRET_PATTERN` 属 legacy 模式（平台模式下 `require_legacy_mode()` 拒绝），按计划第 8 节「不改动旧模式行为」保留；平台模型客户端本来就不回显上游正文。MCP 服务器 schema 无操作员侧标记入口；沙箱导出文件不扫描；诊断包导出（GOV-05）不存在故未覆盖。
   **证明**：合成 secret marker 分别嵌入 header、query、body、env、嵌套异常链与工具结果，触发失败/SSE error/审计查询/relay 投递四条出口，断言各出口均无 marker；对标注 `x-aio-sensitive` 的工具参数，审计行不含该字段任何形态（含摘要外的原值）；摘除标记会改变 `definition_digest` 并使发布校验失败；纵深断言层在人为构造的绕过用例中拒绝写入而非替换后放行。对应 ECASE-33。
 - [x] 审计访问受限且自身留痕，普通运维默认无正文。
   **实际**：服务层与 HTTP 层 `operator`/成员 403 `ADMIN_FORBIDDEN`，auditor 200 且无 `metadata` 列；每次读取一条 `audit.read`（含 scope/limit/行数/时间窗/游标与 HTTP trace），自审计写失败时查询失败且不新增行。偏差：审计端点是 GET，CSRF 只约束变更请求，「缺 CSRF 的 403」不适用；当前没有导出端点。

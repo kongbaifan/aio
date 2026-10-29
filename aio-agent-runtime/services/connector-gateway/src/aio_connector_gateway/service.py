@@ -17,7 +17,7 @@ from .contracts import (
     bounded,
     strict_json,
 )
-from .protocol import MCPClient
+from .protocol import MCPClient, credential_forms
 from .vault import Vault
 
 
@@ -280,7 +280,7 @@ class ConnectorGateway:
                 import json
 
                 raw = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-                if token and token in raw:
+                if any(form in raw for form in credential_forms(token)):
                     raise GatewayError("MCP_CREDENTIAL_ECHO_DENIED")
                 return bounded(result, 1048576)
 
