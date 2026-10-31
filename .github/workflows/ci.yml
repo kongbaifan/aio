@@ -193,6 +193,7 @@ jobs:
             aio-agent-runtime/var/verification/sandbox-profile.json
             aio-agent-runtime/var/verification/workbench-http.json
             aio-agent-runtime/var/verification/workbench-http-server.log
+            aio-agent-runtime/var/verification/workbench-lifecycle.json
 
 
   platform-web:

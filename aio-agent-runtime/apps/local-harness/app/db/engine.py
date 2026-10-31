@@ -14,7 +14,7 @@ from ..auth.principal import Principal
 from ..platform_errors import PlatformConfigurationError
 from .schema import TENANT_TABLES
 
-SCHEMA_REVISION = "0014_audit_records"
+SCHEMA_REVISION = "0015_audit_archive"
 
 
 class Database:

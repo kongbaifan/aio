@@ -175,7 +175,7 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 
 ## 6. 执行与证据清单
 
-> 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`）；Slice B、C 未开始。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
+> 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`），已合入 master（kongbaifan/aio#1）。Slice B 的 relay 已落地（`app/observability/archive.py`、v15、`tests/platform/test_audit_relay.py`），只验收 fake sink，未接真实适配器/进程。Slice C 未开始。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
 
 - [x] v14 迁移、审计扩列、outbox 投递簿记与 runtime 最小权限。
   **实际**：真 PG 从 `0013_shared_budgets` 升级、legacy 行逐字段不变、新自由 metadata 被拒、仅 legacy 时可降级、存在结构化行时降级拒绝；runtime 对审计 UPDATE/DELETE 及 outbox `payload`/`kind`/`aggregate_id` UPDATE、DELETE 均为 `42501`，六个簿记列可改；启动校验对多授的审计列 UPDATE 报错（负控）。4 KiB 上限实测按未压缩值计算，可压缩大字段同样被拒。实施中发现并修复：CHECK 字符串中的 `':v1'` 被 SQLAlchemy 当作绑定参数渲染为 `'NULL'`，导致全部结构化写入失败；已加不依赖 PG 的 DDL 渲染回归用例。
@@ -186,9 +186,11 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 - [x] 高风险 fail-closed：PG 审计不可写即无外部效果，且 `consume_dispatch` 补齐意图审计。
   **实际**：用按租户+action 限定的 BEFORE INSERT 触发器注入真实 DB 失败：`prepare_dispatch` 无 dispatch 行；`consume_dispatch` 回滚为可再消费的 `prepared`、无 `tool.started` 事件；Worker 路径 run `failed`、dispatch `not_sent`、`EffectSink.requests == []`；错误为 503 `AUDIT_SINK_UNAVAILABLE` 且无异常链、无触发器消息。`require_recorded` 负控：跳过写入或写到另一 event_id 均被拒。另补齐计划表中的 Run 核对：新增 `run.reconcile`（只存 `evidence_digest`），审计失败时 blocker 保持未解除。
   **证明**：真 PG 用例注入审计插入失败（对 `aio_audit_events` 的 INSERT 权限剥离或触发器抛错）后尝试 `prepare_dispatch` 与 `consume_dispatch`，断言事务回滚、`aio_dispatches` 无新行、`EffectSink.effect_count == 0`、错误码为 `AUDIT_SINK_UNAVAILABLE`；删除 `consume_dispatch` 的新增审计调用会使 `require_recorded` 守卫用例失败（守卫本身有负控）。对应 ECASE-34 前半。
-- [ ] 归档投递可重试、有界退避、单飞租约、重复投递不产生重复事实。
+- [x] 归档投递可重试、有界退避、单飞租约、重复投递不产生重复事实。
+  **实际**：真 PG：sink 依次失败/超时/抛含 marker 的异常/成功，`attempts` 1→4、`next_attempt_at` 按 5/10/20s 推进、未到期不重领、`last_error_code` 只含固定码且无 marker；两 relay 一方持锁未提交时另一方领到不相交的行，并发排空无重复投递；租约过期后接管，旧 relay 在新 relay 持租约期间与完成后 `finish` 均不改任何列，重发携带同一幂等键；claim 事务内 `pg_locks` 只有 outbox/审计表，无 `aio_runs`/`aio_organizations`/`aio_budget_pools`/`aio_budgets`/`aio_jobs`/`aio_resources`；发送时连接池占用为 0；claim 语句 `EXPLAIN` 命中 `ix_aio_outbox_audit_pending` 且无 Sort。变异测试 9 项杀死 8 项；存活的「claim 去掉 org 谓词」被 FORCE RLS 兜住，结果不变（该谓词保留用于索引前缀）。**偏差**：计划写的「sink 侧以 `(org_id, id)` 去重」由契约要求 + fake sink 实现，不是平台能保证的；PG 侧 `delivered_at` 只设置一次由栅栏保证。新增 v15 迁移（计划原写「无需新迁移」）：v14 的待投递索引不区分 kind，relay 会扫过永远待投递的 `run.event.available` 行。
   **证明**：fake 归档 sink 依次返回失败/超时/成功，断言 `attempts` 单调递增、`next_attempt_at` 按退避推进、`last_error_code` 只含稳定码；两个 relay 实例并发下 `FOR UPDATE SKIP LOCKED` 使每行只被一方投递；sink 收到重复投递时以 `(org_id, id)` 幂等键去重，PG 侧 `delivered_at` 只被设置一次；relay 事务内 `pg_locks` 快照证明未持有 `aio_runs`/`aio_organizations`/`aio_budget_pools` 上的锁。
-- [ ] 两类故障不混淆：归档中断不阻断只读请求与已获权动作。
+- [x] 两类故障不混淆：归档中断不阻断只读请求与已获权动作。
+  **实际**：sink 全程 `ARCHIVE_UNAVAILABLE` 时，Worker 完成含已获权 dispatch 的 Run（外部 sink 恰好一次）、Run 详情与会话列表正常，业务响应中无 `AUDIT_ARCHIVE*`；`backlog()` 为 `AUDIT_ARCHIVE_BACKLOG`，待投递数等于 PG 事实数，错误计数只有 `ARCHIVE_UNAVAILABLE`；恢复后全部事实补投、无内容泄漏；PG 审计写失败时为 `AUDIT_SINK_UNAVAILABLE` 且不产生指针；`serve()` 的告警日志含码与计数、不含 sink 异常文本。**未做**：只读 API 覆盖了 Run 详情、会话列表与事件回放（SSE 源），未覆盖知识检索；backlog 未导出为指标，没有管理 API；`run_worker.py` 未启动 relay（无真实适配器可接）。
   **证明**：sink 全程不可用时，只读 API（Run 列表/事件回放/知识检索）与已获权高风险 dispatch 仍成功，`AUDIT_ARCHIVE_BACKLOG` 只出现在指标/告警而不进业务响应；同一用例断言 PG 审计行仍然写入且 backlog 计数增长。对应 ECASE-34 后半「不混淆两种故障」。
 - [ ] 脱敏边界：五个出口、schema 级标记、正文不可达。
   **实际（仅审计出口）**：审计 metadata 封闭类型 + 真实 approved Run 的事实不含 prompt/回答/参数值；`x-aio-sensitive`、统一 `scrub()`、SSE/错误/relay 出口与替换 `_SECRET_PATTERN`、网关 `replace` 均未做（Slice C）。

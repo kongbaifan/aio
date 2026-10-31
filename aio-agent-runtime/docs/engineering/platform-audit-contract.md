@@ -1,6 +1,6 @@
 # 平台持久审计与结构化元数据契约
 
-> 当前代码契约（GOV-02 Slice A），不是合规认证或生产 Gate。实现：`app/observability/{audit,redaction}.py`、`app/db/schema_v14.py`、`migrations/versions/0014_audit_records.py`、`app/db/{engine,provisioning}.py`。计划与证据见 [实施计划](../implementation/audit-redaction-plan.md)。
+> 当前代码契约（GOV-02 Slice A + B），不是合规认证或生产 Gate。实现：`app/observability/{audit,redaction,archive}.py`、`app/db/schema_v1{4,5}.py`、`migrations/versions/001{4_audit_records,5_audit_archive}.py`、`app/db/{engine,provisioning}.py`。计划与证据见 [实施计划](../implementation/audit-redaction-plan.md)。
 
 ## 1. 语义
 
@@ -32,7 +32,20 @@
 - CHECK（`NOT VALID`：不校验历史行，但约束所有新 INSERT，含表 owner）：`metadata_schema = action || ':v1'` 且非 `legacy`；`metadata` 为 JSON object 且 `pg_column_size <= 4096`；trace 为 32 位小写十六进制且非全零；decision / risk_class / resource_kind 为封闭枚举；revision 非负。实测 4 KiB 上限按未压缩值计算，可压缩的大段正文同样被拒。
 - 索引 `ix_aio_audit_org_created_id (org_id, created_at DESC, id)` 支撑分页，`EXPLAIN` 断言无 Sort 节点。
 - **有意例外**：`run_id`/`resource_id` 不加复合组织外键。审计事实必须在主体删除后继续存在；外键会阻塞删除或诱导 `ON DELETE CASCADE` 抹掉审计，且会在 `aio_runs` 上引入 `FOR KEY SHARE` 改变锁序。组织一致性由 `record()` 的 scope 校验和 FORCE RLS 保证。
-- `aio_outbox` 增加投递簿记列 `next_attempt_at, last_error_code, lease_owner, leased_until` 与对应 CHECK/部分索引；**当前没有 relay 消费者**（Slice B）。
+- `aio_outbox` 增加投递簿记列 `next_attempt_at, last_error_code, lease_owner, leased_until` 与对应 CHECK/部分索引。v15 另加只覆盖 `kind='audit.archive'` 待投递行的 `ix_aio_outbox_audit_pending (org_id, next_attempt_at, id)`：其他 kind（`run.event.available` 等）目前无消费者、会一直待投递，不能让 relay 每次扫过它们。
+
+## 3a. 归档投递（v15，GOV-02 Slice B）
+
+- `record()` 在写事实的同一事务里插入一条 `aio_outbox(kind='audit.archive', aggregate_id=<audit id>, payload={})`。它只是指针：relay 投递时重新读审计行，不复制内容。事实回滚则指针一起回滚；审计写失败（`AUDIT_SINK_UNAVAILABLE`）时不会有指针。
+- `0015_audit_archive` 为 v14 已写入的结构化事实补指针（`NOT EXISTS` 防重复，需 RLS 豁免身份）；`legacy` 行没有封闭契约，不归档。降级只删索引，保留指针。
+- 投递单元 `ArchiveRecord` 恰好是审计行的类型化列 + 按 action 契约重新校验的 metadata（`extra="forbid"`）。指向的事实不存在或不能投影为封闭记录时不发送，记 `ARCHIVE_RECORD_INVALID`。
+- `AuditRelay` 三段式，每段独立：
+  1. **claim**：短事务内 `SELECT ... FOR UPDATE OF aio_outbox SKIP LOCKED LIMIT n` 取到期且租约空/过期的行，写 `lease_owner/leased_until`。只锁 outbox 行，不取组织/Run/预算锁，与既有锁序前缀无交集（`pg_locks` 测试断言）。
+  2. **send**：事务外、不占用连接池连接，调用 sink，带超时。sink 必须按 `idempotency_key = "<org_id>:<audit_id>"` 去重；投递语义是至少一次。
+  3. **finish**：短事务，**以 `lease_owner` 为栅栏**：失去租约（已被另一 relay 接管）的旧 relay 什么都改不了。成功写 `delivered_at`；失败 `attempts+1`、`next_attempt_at` 指数退避（5s 起翻倍，上限 15 min，无上限次数，不丢弃事实），`last_error_code` 只存固定词表（`ARCHIVE_UNAVAILABLE / REJECTED / TIMEOUT / DELIVERY_FAILED / RECORD_INVALID`），sink 的异常文本从不入库或写日志。
+- 租约必须长于发送超时（构造时校验），否则另一个 relay 可能在发送中途接管。
+- **两类故障分离**：PG 审计写失败是 `AUDIT_SINK_UNAVAILABLE`，拒绝动作；归档不可达只表现为 backlog。`backlog()` 返回待投递数、重试中数、最老待投递秒数和错误码计数；超过 `backlog_alert_seconds` 时为 `AUDIT_ARCHIVE_BACKLOG`，`serve()` 只记一条 warning（组织与计数，无内容）。这个码不进入任何业务响应。
+- **当前边界**：只有契约一致的 fake sink；**没有真实归档/SIEM 适配器，`run_worker.py` 也未启动 relay**，因此部署后指针会累积在 outbox 中（PG 事实不受影响），接入适配器后从最早的事实开始补投。backlog 未导出为指标，也没有管理 API。
 
 ## 4. 权限
 
@@ -47,4 +60,4 @@
 
 ## 6. 未包含（见计划第 7、8 节）
 
-Outbox relay 与归档投递、两类故障分离（Slice B）；`x-aio-sensitive` schema 标记、五出口统一 `scrub()`、替换 `_SECRET_PATTERN` 与网关 `replace`（Slice C）；保留策略（OPS-03）；support grant（GOV-05）；kill switch（GOV-04）；真实 SIEM/归档后端。
+真实归档适配器、relay 进程接入与 backlog 指标导出（见 3a）；`x-aio-sensitive` schema 标记、五出口统一 `scrub()`、替换 `_SECRET_PATTERN` 与网关 `replace`（Slice C）；保留策略（OPS-03）；support grant（GOV-05）；kill switch（GOV-04）；真实 SIEM/归档后端。
