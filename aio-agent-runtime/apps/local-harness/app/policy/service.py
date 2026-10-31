@@ -79,6 +79,9 @@ def authorize(
             allowed = True
     if not allowed:
         return deny("RESOURCE_NOT_FOUND")
+    # After access is established, so a switch never reveals that an inaccessible resource exists.
+    if any(sw.blocks(action, resource.kind, resource.id, principal.user_id) for sw in facts.kill_switches):
+        return deny("KILL_SWITCH_ACTIVE")
     kind = DecisionKind.APPROVAL_REQUIRED if requires_approval else DecisionKind.ALLOW
     return Decision(
         kind, "APPROVAL_REQUIRED" if requires_approval else "ALLOWED", facts.policy_revision, resource.revision

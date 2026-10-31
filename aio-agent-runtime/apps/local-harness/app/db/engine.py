@@ -14,7 +14,7 @@ from ..auth.principal import Principal
 from ..platform_errors import PlatformConfigurationError
 from .schema import TENANT_TABLES
 
-SCHEMA_REVISION = "0015_audit_archive"
+SCHEMA_REVISION = "0016_kill_switches"
 
 
 class Database:
@@ -105,7 +105,11 @@ class Database:
                 "OR has_table_privilege(current_user, 'aio_audit_events', 'DELETE') "
                 "OR has_table_privilege(current_user, 'aio_outbox', 'DELETE') "
                 "OR EXISTS(SELECT 1 FROM unnest(ARRAY['id', 'org_id', 'aggregate_id', 'kind', 'payload', 'created_at']) "
-                "AS field(name) WHERE has_column_privilege(current_user, 'aio_outbox', field.name, 'UPDATE'))"
+                "AS field(name) WHERE has_column_privilege(current_user, 'aio_outbox', field.name, 'UPDATE')) "
+                "OR has_table_privilege(current_user, 'aio_kill_switches', 'DELETE') "
+                "OR EXISTS(SELECT 1 FROM unnest(ARRAY['org_id', 'id', 'scope', 'target_id', 'execution_class', "
+                "'reason_code', 'note_digest', 'activated_by', 'activated_at', 'expires_at']) "
+                "AS field(name) WHERE has_column_privilege(current_user, 'aio_kill_switches', field.name, 'UPDATE'))"
             )).scalar_one()
             if unsafe_audit_grants:
                 raise PlatformConfigurationError("Platform audit facts and outbox payloads must be immutable")

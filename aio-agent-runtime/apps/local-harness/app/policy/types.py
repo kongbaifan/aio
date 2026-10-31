@@ -43,6 +43,8 @@ class AuthorizationFacts:
     department_ids: frozenset[UUID] = frozenset()
     denied_actions: frozenset[str] = frozenset()
     allowed_classifications: frozenset[str] = frozenset({"public", "internal"})
+    # Active emergency switches (policy.kill_switches.KillSwitch), loaded with the other facts.
+    kill_switches: tuple = ()
 
 
 @dataclass(frozen=True, slots=True)

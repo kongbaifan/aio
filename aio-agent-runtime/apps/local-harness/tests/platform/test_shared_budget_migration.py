@@ -22,6 +22,7 @@ from app.db.engine import Database
 from app.db.provisioning import provision_agent, provision_budget, provision_identity
 from app.runtime.service import PlatformService
 from app.observability import audit
+from app.policy import kill_switches
 from knowledge_fixtures import base, upload, knowledge_platform
 
 
@@ -37,6 +38,8 @@ def legacy_budget_database(postgres, platform_settings, tmp_path, monkeypatch):
         ))
 
     monkeypatch.setattr(audit, "record", legacy_audit)
+    # v12 has no kill switch table; the old authorization path had no switches to read.
+    monkeypatch.setattr(kill_switches, "active", lambda connection, org_id: ())
     _, parent, _ = postgres
     name = "aio_budget_upgrade_" + secrets.token_hex(6)
     engine = database = None

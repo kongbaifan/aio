@@ -15,6 +15,8 @@ from .contracts import (
     DepartmentCreate,
     DepartmentMember,
     GrantCreate,
+    KillSwitchCreate,
+    KillSwitchRelease,
     MemberCreate,
     MemberUpdate,
     ModelCreate,
@@ -170,3 +172,15 @@ def register_admin_routes(app, admin: AdminService, principal):
     @app.put("/api/v2/admin/policy")
     async def update_policy(body: OrganizationPolicy, identity=Depends(principal)):
         return await asyncio.to_thread(admin.update_policy, identity, body)
+
+    @app.get("/api/v2/admin/kill-switches")
+    async def kill_switches(identity=Depends(principal)):
+        return {"items": await asyncio.to_thread(admin.kill_switches, identity)}
+
+    @app.post("/api/v2/admin/kill-switches", status_code=201)
+    async def activate_kill_switch(body: KillSwitchCreate, identity=Depends(principal)):
+        return await asyncio.to_thread(admin.activate_kill_switch, identity, body)
+
+    @app.post("/api/v2/admin/kill-switches/{switch_id}/release")
+    async def release_kill_switch(switch_id: UUID, body: KillSwitchRelease, identity=Depends(principal)):
+        return await asyncio.to_thread(admin.release_kill_switch, identity, switch_id, body)

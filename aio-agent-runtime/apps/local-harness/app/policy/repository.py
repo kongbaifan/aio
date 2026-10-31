@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from ..auth.principal import Principal
 from ..db import schema as s
 from ..platform_errors import PlatformError
+from . import kill_switches
 from .service import OWNER_ACTIONS, authorize
 from .types import AuthorizationFacts, DecisionKind, Grant, Resource
 
@@ -129,6 +130,7 @@ def current_facts(connection: Connection, principal: Principal, *, lock: bool = 
         department_ids=frozenset(department_ids),
         allowed_classifications=frozenset(org["allowed_classifications"]),
         denied_actions=frozenset(org["denied_actions"]),
+        kill_switches=kill_switches.active(connection, principal.org_id),
     )
 
 
@@ -199,6 +201,8 @@ def require_resource(
     grants = grants + group_grants
     resource = resource_from_row(row)
     decision = authorize(principal, action, resource, facts, grants, now=db_now(connection))
+    if decision.reason_code == "KILL_SWITCH_ACTIVE":
+        raise kill_switches.denied()
     if decision.outcome != DecisionKind.ALLOW:
         raise PlatformError(decision.reason_code, "Resource does not exist or is not accessible", 404)
     return resource

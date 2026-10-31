@@ -108,6 +108,39 @@ class Rename(RequestContract):
     name: str = Field(min_length=1, max_length=200)
 
 
+class KillSwitchCreate(RequestContract):
+    scope: Literal["organization", "user", "tool", "model", "agent", "execution_class"]
+    target_id: UUID | None = None
+    execution_class: Literal["python", "mcp", "knowledge", "skill"] | None = None
+    reason_code: Literal["SECURITY_INCIDENT", "DATA_EXPOSURE", "COST_RUNAWAY", "PROVIDER_INCIDENT", "OPERATOR_REQUEST"]
+    # Free text is accepted for the operator's record but only its digest is stored or audited.
+    note: str = Field(min_length=1, max_length=2000)
+    expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def aware(cls, value):
+        if value is not None:
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("Expiry must be timezone aware")
+            return value.astimezone(timezone.utc)
+        return value
+
+    @model_validator(mode="after")
+    def exact_target(self):
+        needs_target = self.scope in {"user", "tool", "model", "agent"}
+        if needs_target != (self.target_id is not None):
+            raise ValueError("This scope requires exactly one target")
+        if (self.scope == "execution_class") != (self.execution_class is not None):
+            raise ValueError("Only the execution_class scope names an execution class")
+        return self
+
+
+class KillSwitchRelease(RequestContract):
+    expected_revision: int = Field(ge=0, strict=True)
+    evidence: str = Field(min_length=1, max_length=2000)
+
+
 class OrganizationPolicy(RequestContract):
     expected_revision: int = Field(ge=0, strict=True)
     allowed_classifications: tuple[Literal["public", "internal", "confidential"], ...] = Field(

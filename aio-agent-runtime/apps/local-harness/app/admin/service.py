@@ -1376,3 +1376,123 @@ class AdminService:
                 'updated',
             )
             return {"policy_revision": row["policy_revision"] + 1}
+
+    # --- Emergency kill switches (GOV-04). Only people set them; models/workers have no entry point. ---
+
+    @staticmethod
+    def _switch_view(row) -> dict:
+        return {key: row[key] for key in (
+            "id", "scope", "target_id", "execution_class", "reason_code", "activated_by", "activated_at",
+            "expires_at", "released_by", "released_at", "revision",
+        )} | {"active": row["released_at"] is None}
+
+    def kill_switches(self, p: Principal) -> list[dict]:
+        with self.transaction(p, roles=frozenset({"org_admin", "operator", "auditor"})) as c:
+            rows = c.execute(
+                select(s.kill_switches).where(s.kill_switches.c.org_id == p.org_id)
+                .order_by(s.kill_switches.c.activated_at.desc(), s.kill_switches.c.id).limit(200)
+            ).mappings().all()
+            return [self._switch_view(row) for row in rows]
+
+    def activate_kill_switch(self, p: Principal, body) -> dict:
+        from ..runtime.actions import canonical_digest
+
+        # The organization FOR UPDATE serializes against every FOR SHARE authorization read, so no
+        # transaction that read the facts before this commit can still admit work after it.
+        with self.transaction(p, write=True) as c:
+            target = body.target_id
+            if body.scope == "user":
+                if c.execute(select(s.memberships.c.user_id).where(
+                        s.memberships.c.org_id == p.org_id, s.memberships.c.user_id == target)).first() is None:
+                    raise PlatformError("RESOURCE_NOT_FOUND", "Switch target is not in this organization", 404)
+                if target == p.user_id:
+                    raise PlatformError("KILL_SWITCH_INVALID", "An administrator cannot lock out their own release", 409)
+            elif body.scope in {"tool", "model", "agent"}:
+                kind = c.execute(select(s.resources.c.kind).where(
+                    s.resources.c.org_id == p.org_id, s.resources.c.id == target)).scalar()
+                if kind != body.scope:
+                    raise PlatformError("RESOURCE_NOT_FOUND", "Switch target is not in this organization", 404)
+            now = db_now(c)
+            if body.expires_at is not None and body.expires_at <= now:
+                raise PlatformError("KILL_SWITCH_INVALID", "Switch expiry must be in the future", 422)
+            existing = [sw for sw in current_facts(c, p).kill_switches
+                        if (sw.scope, sw.target_id, sw.execution_class) == (body.scope, target, body.execution_class)]
+            if existing:
+                raise PlatformError("KILL_SWITCH_EXISTS", "An identical switch is already active", 409)
+            id, note_digest = uuid4(), canonical_digest("aio-kill-switch-note-v1", body.note)
+            c.execute(insert(s.kill_switches).values(
+                org_id=p.org_id, id=id, scope=body.scope, target_id=target, execution_class=body.execution_class,
+                reason_code=body.reason_code, note_digest=note_digest, activated_by=p.user_id, activated_at=now,
+                expires_at=body.expires_at,
+            ))
+            self.bump_policy(c, p.org_id)
+            audit.record(
+                c, p, "kill_switch.activate", id, "active",
+                m.KillSwitchActivated(scope=body.scope, target_id=target, execution_class=body.execution_class,
+                                      reason_code=body.reason_code, note_digest=note_digest,
+                                      expires_at=body.expires_at),
+                decision="deny", reason_code="KILL_SWITCH_ACTIVE",
+            )
+        # Separate transactions per Run, after the switch is durable: a failed sweep never undoes the
+        # switch, and every later step of those Runs is denied by the switch itself anyway.
+        stopped = self.sweep_kill_switch(p.org_id, id)
+        return {"id": id, "active": True, "stopped_runs": stopped}
+
+    def sweep_kill_switch(self, org_id: UUID, switch_id: UUID) -> int:
+        """Stop in-scope unfinished Runs through the normal lifecycle: unsent work is cancelled and
+        refunded; sent-but-unknown work becomes recovery_required with its blocker kept."""
+        from ..policy.kill_switches import KillSwitch, affects_run
+        from ..runtime.execution import ExecutionStore, TERMINAL
+
+        store = ExecutionStore(self.db, self.settings)
+        with self.db.scoped(org_id, UUID(int=0)) as c:
+            row = c.execute(select(s.kill_switches).where(
+                s.kill_switches.c.org_id == org_id, s.kill_switches.c.id == switch_id,
+                s.kill_switches.c.released_at.is_(None))).mappings().first()
+            if row is None:
+                return 0
+            switch = KillSwitch(row["id"], row["scope"], row["target_id"], row["execution_class"])
+            candidates = c.execute(
+                select(s.runs.c.id, s.runs.c.actor_id, s.runs.c.agent_version_id, s.manifest_snapshots.c.content)
+                .join(s.manifest_snapshots, (s.manifest_snapshots.c.org_id == s.runs.c.org_id)
+                      & (s.manifest_snapshots.c.id == s.runs.c.manifest_snapshot_id))
+                .where(s.runs.c.org_id == org_id, s.runs.c.state.not_in(list(TERMINAL | {"recovery_required"})))
+                .order_by(s.runs.c.created_at).limit(1000)
+            ).mappings().all()
+        stopped = 0
+        for run in candidates:
+            if not affects_run(switch, run, run["content"] or {}):
+                continue
+            try:
+                with store._system_locked(org_id, run["id"]) as (c, current, job, now):
+                    if current["state"] in TERMINAL | {"recovery_required"}:
+                        continue
+                    store._stop_locked(c, current, "KILL_SWITCH_ACTIVE", cancelled=True)
+                    stopped += 1
+            except PlatformError:
+                continue  # already handled elsewhere; the switch still denies its next step
+        return stopped
+
+    def release_kill_switch(self, p: Principal, switch_id: UUID, body) -> dict:
+        from ..runtime.actions import canonical_digest
+
+        with self.transaction(p, write=True) as c:
+            row = c.execute(select(s.kill_switches).where(
+                s.kill_switches.c.org_id == p.org_id, s.kill_switches.c.id == switch_id).with_for_update()
+            ).mappings().first()
+            if row is None:
+                raise PlatformError("RESOURCE_NOT_FOUND", "Switch is not in this organization", 404)
+            if row["released_at"] is not None or row["revision"] != body.expected_revision:
+                raise PlatformError("REVISION_CONFLICT", "Switch changed; refresh before releasing", 409)
+            if row["activated_by"] == p.user_id:
+                raise PlatformError("SEPARATION_OF_DUTIES", "A different administrator must release this switch", 403)
+            evidence = canonical_digest("aio-kill-switch-release-v1", body.evidence)
+            c.execute(update(s.kill_switches).where(s.kill_switches.c.id == switch_id).values(
+                released_by=p.user_id, released_at=db_now(c), release_evidence_digest=evidence,
+                revision=row["revision"] + 1,
+            ))
+            self.bump_policy(c, p.org_id)
+            audit.record(c, p, "kill_switch.release", switch_id, "released",
+                         m.KillSwitchReleased(activated_by=row["activated_by"], evidence_digest=evidence))
+            # Releasing only re-admits NEW work; Runs this switch cancelled stay cancelled.
+            return {"id": switch_id, "active": False, "revision": row["revision"] + 1}

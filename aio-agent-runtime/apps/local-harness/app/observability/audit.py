@@ -103,6 +103,8 @@ CONTRACTS = {
     "skill.archive.finish": _contract(m.ArchiveFinished, "imported cancelled rejected", "skill_import"),
     "artifact.upload": _contract(m.ArtifactUploaded, "stored", "artifact"),
     "audit.read": _contract(m.AuditRead, "read", "organization"),
+    "kill_switch.activate": _contract(m.KillSwitchActivated, "active", "kill_switch"),
+    "kill_switch.release": _contract(m.KillSwitchReleased, "released", "kill_switch"),
 }
 
 
