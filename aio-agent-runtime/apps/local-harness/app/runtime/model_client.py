@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..observability import scrub
 from ..platform_errors import PlatformError
 from ..platform_settings import validate_endpoint
 from .actions import strict_json
@@ -45,6 +46,8 @@ class ChatModel:
         secret = os.environ.get(name, "")
         if not secret or len(secret) > 16384 or any(ord(ch) < 32 for ch in secret):
             raise PlatformError("MODEL_SECRET_UNAVAILABLE", "Model credential is unavailable", 503)
+        # Every later scrub (tool results, audit, archive, logs) also removes this key in any encoding.
+        scrub.register_material(secret)
         self._secret = secret
         self.endpoint = endpoint
         self.max_tokens = config.get("max_output_tokens", 2048)

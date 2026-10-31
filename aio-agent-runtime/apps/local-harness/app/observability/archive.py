@@ -22,6 +22,7 @@ from sqlalchemy import and_, func, or_, select, text, update
 from ..db import schema as s
 from . import audit
 from . import redaction as m
+from . import scrub
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,8 @@ class AuditRelay:
         for row in ids:
             try:
                 record = ArchiveRecord.from_row(facts[row.aggregate_id])
-            except (KeyError, ValueError, ValidationError):
+                scrub.assert_clean(record.model_dump_json())  # never ship known material off-host
+            except (KeyError, ValueError, ValidationError, scrub.SensitiveLeak):
                 record = None
             claims.append(Claim(row.id, record))
         return claims

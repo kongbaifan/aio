@@ -20,6 +20,7 @@ from ..billing import budgets as shared_budgets
 from ..db import schema as s
 from ..observability import audit
 from ..observability import redaction as m
+from ..observability import scrub
 from ..db.engine import Database
 from ..platform_errors import PlatformError
 from ..platform_settings import PlatformSettings, WorkerSettings
@@ -1120,8 +1121,11 @@ class ExecutionStore:
         if outcome not in {"succeeded", "failed", "not_sent"}:
             raise PlatformError("INVALID_OUTCOME", "Use reconciliation for uncertain effects", 409)
         output = bounded_json(output, MAX_TOOL_RESULT_BYTES, "TOOL_RESULT_TOO_LARGE")
-        digest = canonical_digest("aio-tool-result-v1", {"outcome": outcome, "result": output})
         with self.locked(handle) as (c, run, job, now, facts):
+            # Masks can be longer than what they replace: re-check the bound on what is actually stored.
+            output = bounded_json(self._scrub_result(c, run, dispatch_id, output), MAX_TOOL_RESULT_BYTES,
+                                  "TOOL_RESULT_TOO_LARGE")
+            digest = canonical_digest("aio-tool-result-v1", {"outcome": outcome, "result": output})
             cp = self._checkpoint(c, run)
             d_info = (
                 c.execute(
@@ -1193,6 +1197,32 @@ class ExecutionStore:
                 risk_class=inv["risk_class"],
             )
             return seq
+
+    @staticmethod
+    def _scrub_result(c, run, dispatch_id: UUID, output):
+        """One scrub before the result reaches dispatch/invocation rows, checkpoint (model) and SSE.
+
+        Material = this call's ``x-aio-sensitive`` argument values + process-held credentials, so a
+        tool that echoes a marked argument or a service token back cannot surface it anywhere.
+        """
+        inv = c.execute(
+            select(s.invocations.c.arguments, s.invocations.c.action)
+            .join(s.dispatches, (s.dispatches.c.org_id == s.invocations.c.org_id)
+                  & (s.dispatches.c.invocation_id == s.invocations.c.id))
+            .where(s.dispatches.c.org_id == run["org_id"], s.dispatches.c.id == dispatch_id)
+        ).first()
+        schema = None
+        if inv is not None and isinstance(inv.action, dict) and inv.action.get("tool_version_id"):
+            schema = c.execute(
+                select(s.tool_versions.c.input_schema).where(
+                    s.tool_versions.c.org_id == run["org_id"],
+                    s.tool_versions.c.id == UUID(inv.action["tool_version_id"]),
+                )
+            ).scalar()
+        if not schema or inv.arguments is None:
+            return scrub.scrub(output)
+        marked = scrub.marked_values(inv.arguments, scrub.sensitive_paths(schema))
+        return scrub.scrub(output, secrets=marked)
 
     @staticmethod
     def _uncertain(c, run) -> tuple[bool, bool]:

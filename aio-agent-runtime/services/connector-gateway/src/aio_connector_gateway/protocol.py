@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import re
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -19,6 +20,19 @@ from .contracts import (
     strict_json,
 )
 from .egress import PinnedTransport
+
+
+def credential_forms(secret: str | None) -> tuple[str, ...]:
+    """The credential as a server could echo it: raw, percent-encoded, base64, base64url; longest first.
+
+    Mirrors app.observability.scrub.material_forms; this service deliberately imports no platform code.
+    """
+    if not secret:
+        return ()
+    raw = secret.encode("utf-8")
+    forms = {secret, quote(secret, safe=""), base64.b64encode(raw).decode("ascii"),
+             base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")}
+    return tuple(sorted(forms, key=len, reverse=True))
 
 
 def tool_definition(raw: dict) -> dict:
@@ -112,9 +126,13 @@ def normalize_result(raw: dict, secret: str) -> dict:
     if structured is not None and not isinstance(structured, dict):
         raise GatewayError("MCP_INVALID_RESULT")
 
+    forms = credential_forms(secret)
+
     def scrub(value):
         if isinstance(value, str):
-            return value.replace(secret, "[credential-redacted]") if secret else value
+            for form in forms:
+                value = value.replace(form, "[credential-redacted]")
+            return value
         if isinstance(value, dict):
             return {scrub(k): scrub(v) for k, v in value.items()}
         if isinstance(value, list):

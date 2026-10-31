@@ -19,6 +19,7 @@ from ...auth.oidc import OIDCClient
 from ...auth.principal import Principal
 from ...auth.service import AuthService, csrf_token
 from ...db.engine import Database
+from ...observability import scrub
 from ...platform_errors import PlatformError
 from ...platform_settings import PlatformSettings
 from ...runtime.service import PlatformService
@@ -58,6 +59,7 @@ def create_platform_app(
     connector_client=None,
 ) -> FastAPI:
     db = database or Database(settings.database_url)
+    scrub.register_process_secrets(settings)
     auth = AuthService(db, settings)
     service = PlatformService(db, settings)
     admin = AdminService(db, settings)

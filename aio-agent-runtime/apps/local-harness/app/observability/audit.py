@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
 from dataclasses import dataclass
 from typing import get_args
 from uuid import UUID, uuid4
@@ -17,6 +18,7 @@ from ..db import schema as s
 from ..platform_errors import PlatformError
 from ..runtime.contracts import bounded_json
 from . import redaction as m
+from . import scrub
 
 _trace_id: ContextVar[str | None] = ContextVar("platform_audit_trace", default=None)
 ARCHIVE_KIND = s.ARCHIVE_KIND
@@ -144,6 +146,11 @@ def record(
     except (ValidationError, ValueError, TypeError):
         raise PlatformError("AUDIT_METADATA_INVALID", "Audit metadata violates its closed contract", 500) from None
     payload = bounded_json(payload, 4096, "AUDIT_METADATA_TOO_LARGE")
+    try:
+        # Closed models already exclude content; a hit here means a contract has a gap. Refuse, don't repair.
+        scrub.assert_clean(json.dumps([payload, context.model_dump(mode="json")], ensure_ascii=False))
+    except scrub.SensitiveLeak:
+        raise PlatformError("AUDIT_METADATA_INVALID", "Audit metadata violates its closed contract", 500) from None
     id = event_id or uuid4()
     try:
         # No business row locks or FK lookups. The caller has already authorized the subject;

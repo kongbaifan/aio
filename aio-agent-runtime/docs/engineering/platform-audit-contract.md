@@ -47,6 +47,28 @@
 - **两类故障分离**：PG 审计写失败是 `AUDIT_SINK_UNAVAILABLE`，拒绝动作；归档不可达只表现为 backlog。`backlog()` 返回待投递数、重试中数、最老待投递秒数和错误码计数；超过 `backlog_alert_seconds` 时为 `AUDIT_ARCHIVE_BACKLOG`，`serve()` 只记一条 warning（组织与计数，无内容）。这个码不进入任何业务响应。
 - **当前边界**：只有契约一致的 fake sink；**没有真实归档/SIEM 适配器，`run_worker.py` 也未启动 relay**，因此部署后指针会累积在 outbox 中（PG 事实不受影响），接入适配器后从最早的事实开始补投。backlog 未导出为指标，也没有管理 API。
 
+## 3b. 出口脱敏（GOV-02.04，Slice C）
+
+`app/observability/scrub.py` 提供唯一的 `scrub()`，两条规则同时生效，**都不靠密钥前缀正则**（未标记、也不是已知密钥的 `sk-…` 之类原样保留）：
+
+1. **结构规则**：工具 `input_schema` 中 `"x-aio-sensitive": true` 的字段（跟随 `#/$defs` 引用、allOf/anyOf/oneOf、数组与对象子树）。标记必须是布尔 `true`。标记在 `input_schema` 里，所以进入 `definition_digest`：发布后摘掉标记，Run 清单校验失败（`TOOL_VERSION_CHANGED`），不会悄悄停止脱敏。
+2. **已知密钥规则**：本次调用中被标记字段的实际值 + 进程登记的凭据（`register_material`：OIDC client secret、Manager/Connector token、数据库口令、运行时解析的模型 key），以原文、percent、base64、base64url 出现在任意字符串或字典键中都替换为 `[credential-redacted]`。短于 8 字符的值不当作密钥。
+
+接入点：
+
+| 出口 | 处理 |
+|---|---|
+| 工具结果（`complete_dispatch`） | 写 dispatch/invocation 行、检查点 tool 消息（下一轮发给模型）、`tool.completed/failed` SSE 事件之前统一 scrub 一次，再重新做大小上限 |
+| 驱动异常 | 原本就只存固定码（`EXECUTION_FAILED` / `NotDispatched.code`）；新增用例证明异常文本里的密钥不进任何行、事件或日志 |
+| 审计 `record()` | 封闭模型之外再做纵深断言：序列化后含已知密钥即拒绝（`AUDIT_METADATA_INVALID`），不替换后放行 |
+| 归档投递 | `ArchiveRecord` 含已知密钥即不发送（`ARCHIVE_RECORD_INVALID`） |
+| 日志 | API 与 Worker 启动时给根 logger 装 `MaterialLogFilter`，消息参数与 traceback 中的已知密钥被替换 |
+| 连接器网关 | `normalize_result` 与发现阶段的回显检查改为覆盖凭据的四种编码（网关不导入平台代码，独立实现同一规则） |
+
+**不处理（有意）**：`invocations.arguments`、检查点里助手自己的 `tool_calls` / `pending_calls`、`model_calls.response` 保留模型产生的原始参数。它们是派发与模型续轮必需的内部状态，不经 SSE、API 响应、审计或归档出口；值本来就是模型给出的。
+
+**未做**：MCP 服务器发布的工具 schema 来自服务器本身，目前没有操作员侧给它们加标记的入口；沙箱导出文件内容不扫描；环境变量绑定的 stdio 凭据在网关内按同一规则处理，平台进程不持有其值，因此不在平台登记。
+
 ## 4. 权限
 
 - Runtime 角色对 `aio_audit_events` 只有 SELECT/INSERT；对 `aio_outbox` 无 DELETE，仅可 UPDATE 六个投递簿记列。`grant_runtime_access` 每次刷新先 REVOKE 表级与全部列级 UPDATE/DELETE 再授予，旧授权不会残留。
