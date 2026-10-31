@@ -17,6 +17,7 @@ from ..observability import redaction as m
 from ..db.engine import Database
 from ..platform_errors import PlatformError
 from ..platform_settings import PlatformSettings, WorkerSettings
+from ..policy import kill_switches
 from ..policy.repository import (
     current_facts,
     db_now,
@@ -404,6 +405,8 @@ class PlatformService:
             )
             if not agent["published"]:
                 raise PlatformError("AGENT_UNAVAILABLE", "Agent version is not published", 409)
+            # A Run that would need a disabled tool/model/class is refused before any model turn is paid for.
+            kill_switches.require_manifest(facts.kill_switches, agent["manifest"], principal.user_id, agent_id)
             mode = request.get("mode", "single")
             if mode not in {"single", "team"}:
                 raise PlatformError("ENGINE_MODE_UNAVAILABLE", "Unknown engine mode", 422)

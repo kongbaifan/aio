@@ -45,6 +45,9 @@ EXAMPLES = [
     (m.ApprovalDecided, {"invocation_id": ID, "requested_by": ID, "requires_different_actor": True,
                          "action_digest": DIGEST}),
     (m.RunReconciled, {"conclusion": "confirmed_success", "resolved_invocations": 1, "evidence_digest": DIGEST}),
+    (m.KillSwitchActivated, {"scope": "tool", "target_id": ID, "execution_class": None,
+                             "reason_code": "SECURITY_INCIDENT", "note_digest": DIGEST, "expires_at": None}),
+    (m.KillSwitchReleased, {"activated_by": ID, "evidence_digest": DIGEST}),
     (m.AuditRead, {"scope": "organization", "row_count": 1, "limit": 10, "since": None, "until": None,
                    "before_created_at": None, "before_id": None}),
 ]

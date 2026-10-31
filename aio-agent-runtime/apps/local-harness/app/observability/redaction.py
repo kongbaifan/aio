@@ -31,12 +31,12 @@ PermissionAction = Literal[
 ResourceKind = Literal[
     "approval", "tool", "model", "project", "session", "run", "artifact", "agent",
     "connection", "mcp_server", "knowledge", "document", "embedding_model", "skill", "skill_import",
-    "organization", "member", "department", "budget", "invocation", "model_call", "embedding_call",
+    "organization", "member", "department", "budget", "invocation", "model_call", "embedding_call", "kill_switch",
 ]
 ReasonCode = Literal[
     "ALLOWED", "APPROVAL_REQUIRED", "RESOURCE_NOT_FOUND", "IDENTITY_REVOKED",
     "IDENTITY_REVISION_CHANGED", "RESOURCE_DISABLED", "UNKNOWN_RESOURCE_ACTION", "UNKNOWN_ACTION",
-    "ORGANIZATION_POLICY_DENIED", "DATA_POLICY_DENIED", "DELEGATION_SCOPE_DENIED",
+    "ORGANIZATION_POLICY_DENIED", "DATA_POLICY_DENIED", "DELEGATION_SCOPE_DENIED", "KILL_SWITCH_ACTIVE",
 ]
 
 
@@ -160,6 +160,27 @@ class RunReconciled(ClosedMetadata):
     evidence_digest: Digest
 
 
+class KillSwitchActivated(ClosedMetadata):
+    scope: Literal["organization", "user", "tool", "model", "agent", "execution_class"]
+    target_id: UUID | None = None
+    execution_class: Literal["python", "mcp", "knowledge", "skill"] | None = None
+    reason_code: Literal["SECURITY_INCIDENT", "DATA_EXPOSURE", "COST_RUNAWAY", "PROVIDER_INCIDENT", "OPERATOR_REQUEST"]
+    note_digest: Digest
+    expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def aware(cls, value):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("Switch expiry requires an explicit timezone")
+        return value.astimezone(timezone.utc) if value is not None else value
+
+
+class KillSwitchReleased(ClosedMetadata):
+    activated_by: UUID
+    evidence_digest: Digest
+
+
 class AuditRead(ClosedMetadata):
     scope: Literal["organization"] = "organization"
     row_count: Annotated[int, Field(ge=0, le=200, strict=True)]
@@ -192,6 +213,7 @@ AuditMetadata = (
     | BudgetLimit | SharedBudgetLimit | CredentialPrepared | CredentialActivated | OAuthAuthorized
     | KnowledgeUpload | KnowledgePublished | ArchiveFinished | SkillValidation | SkillReviewed
     | ArtifactUploaded | ToolPlanned | ToolDispatch | ToolResult | ApprovalDecided | RunReconciled | AuditRead
+    | KillSwitchActivated | KillSwitchReleased
 )
 
 

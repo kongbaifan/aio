@@ -723,6 +723,110 @@
         "title": "IngestionRetry",
         "type": "object"
       },
+      "KillSwitchCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_class": {
+            "anyOf": [
+              {
+                "enum": [
+                  "python",
+                  "mcp",
+                  "knowledge",
+                  "skill"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Class"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Note",
+            "type": "string"
+          },
+          "reason_code": {
+            "enum": [
+              "SECURITY_INCIDENT",
+              "DATA_EXPOSURE",
+              "COST_RUNAWAY",
+              "PROVIDER_INCIDENT",
+              "OPERATOR_REQUEST"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "organization",
+              "user",
+              "tool",
+              "model",
+              "agent",
+              "execution_class"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          }
+        },
+        "required": [
+          "scope",
+          "reason_code",
+          "note"
+        ],
+        "title": "KillSwitchCreate",
+        "type": "object"
+      },
+      "KillSwitchRelease": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Evidence",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "evidence"
+        ],
+        "title": "KillSwitchRelease",
+        "type": "object"
+      },
       "KnowledgeCreate": {
         "additionalProperties": false,
         "properties": {
@@ -2353,6 +2457,104 @@
           }
         },
         "summary": "Create Embedding"
+      }
+    },
+    "/api/v2/admin/kill-switches": {
+      "get": {
+        "operationId": "kill_switches_api_v2_admin_kill_switches_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Kill Switches"
+      },
+      "post": {
+        "operationId": "activate_kill_switch_api_v2_admin_kill_switches_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Kill Switch"
+      }
+    },
+    "/api/v2/admin/kill-switches/{switch_id}/release": {
+      "post": {
+        "operationId": "release_kill_switch_api_v2_admin_kill_switches__switch_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "switch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Switch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchRelease"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Kill Switch"
       }
     },
     "/api/v2/admin/mcp/servers": {

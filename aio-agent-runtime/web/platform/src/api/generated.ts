@@ -210,6 +210,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/admin/kill-switches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Kill Switches */
+        get: operations["kill_switches_api_v2_admin_kill_switches_get"];
+        put?: never;
+        /** Activate Kill Switch */
+        post: operations["activate_kill_switch_api_v2_admin_kill_switches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/admin/kill-switches/{switch_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release Kill Switch */
+        post: operations["release_kill_switch_api_v2_admin_kill_switches__switch_id__release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/admin/mcp/servers": {
         parameters: {
             query?: never;
@@ -1821,6 +1856,34 @@ export interface components {
             /** Expected Generation */
             expected_generation: number;
         };
+        /** KillSwitchCreate */
+        KillSwitchCreate: {
+            /** Execution Class */
+            execution_class?: ("python" | "mcp" | "knowledge" | "skill") | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Note */
+            note: string;
+            /**
+             * Reason Code
+             * @enum {string}
+             */
+            reason_code: "SECURITY_INCIDENT" | "DATA_EXPOSURE" | "COST_RUNAWAY" | "PROVIDER_INCIDENT" | "OPERATOR_REQUEST";
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "organization" | "user" | "tool" | "model" | "agent" | "execution_class";
+            /** Target Id */
+            target_id?: string | null;
+        };
+        /** KillSwitchRelease */
+        KillSwitchRelease: {
+            /** Evidence */
+            evidence: string;
+            /** Expected Revision */
+            expected_revision: number;
+        };
         /** KnowledgeCreate */
         KnowledgeCreate: {
             /** Description */
@@ -2622,6 +2685,94 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    kill_switches_api_v2_admin_kill_switches_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    activate_kill_switch_api_v2_admin_kill_switches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KillSwitchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_kill_switch_api_v2_admin_kill_switches__switch_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                switch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KillSwitchRelease"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

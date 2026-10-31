@@ -14,6 +14,7 @@ from ..auth.principal import Principal
 from ..connections.catalog import MCP_DRIVERS
 from ..db import schema as s
 from ..platform_errors import PlatformError
+from ..policy import kill_switches
 from ..policy.repository import require_resource
 from .actions import canonical_digest
 from .contracts import bounded_json
@@ -147,6 +148,7 @@ def current_tool(c, principal: Principal, tool_id: UUID, snapshot_entry: dict) -
     ):
         raise PlatformError("TOOL_VERSION_CHANGED", "The tool no longer matches this run manifest", 409)
     validate_schema(row["input_schema"])
+    kill_switches.require_driver(kill_switches.active(c, principal.org_id), row["driver"])
     if row["driver"] == "knowledge.search":
         from ..knowledge.catalog import current_knowledge, current_embedding
 
