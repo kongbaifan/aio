@@ -544,7 +544,9 @@ class PlatformService:
             return {"run_id": run_id, "state": "queued", "session_revision": resource.revision + 1}
 
     def get_run(self, principal: Principal, run_id: UUID) -> dict:
-        with self.database.transaction(principal) as c:
+        # One snapshot: the Run row and its checkpoint/team rows are committed together by the worker,
+        # and separate READ COMMITTED reads could pair an old Run with a newer checkpoint.
+        with self.database.transaction(principal, snapshot=True) as c:
             row = self._run(c, principal, run_id)
             require_resource(c, principal, row["session_id"], "session.read")
             require_resource(c, principal, row["project_id"], "project.read")

@@ -28,22 +28,27 @@ class Database:
         self.engine.dispose()
 
     @contextmanager
-    def transaction(self, principal: Principal) -> Iterator[Connection]:
-        with self.scoped(principal.org_id, principal.user_id) as connection:
+    def transaction(self, principal: Principal, *, snapshot: bool = False) -> Iterator[Connection]:
+        with self.scoped(principal.org_id, principal.user_id, snapshot=snapshot) as connection:
             yield connection
 
     @contextmanager
-    def scoped(self, org_id: UUID, user_id: UUID) -> Iterator[Connection]:
+    def scoped(self, org_id: UUID, user_id: UUID, *, snapshot: bool = False) -> Iterator[Connection]:
+        """``snapshot``: one REPEATABLE READ view for multi-statement reads; only for lock-free read paths."""
         if not isinstance(org_id, UUID) or not isinstance(user_id, UUID):
             raise ValueError("Database scope requires verified UUIDs")
-        with self.engine.begin() as connection:
-            connection.execute(
-                text("SELECT set_config('aio.org_id', :org, true), set_config('aio.user_id', :usr, true)"),
-                {"org": str(org_id), "usr": str(user_id)},
-            )
-            connection.execute(text("SET LOCAL statement_timeout = '10s'"))
-            connection.execute(text("SET LOCAL lock_timeout = '3s'"))
-            yield connection
+        with self.engine.connect() as connection:
+            if snapshot:
+                # Must be set before BEGIN; the pool resets it when the connection is returned.
+                connection = connection.execution_options(isolation_level="REPEATABLE READ")
+            with connection.begin():
+                connection.execute(
+                    text("SELECT set_config('aio.org_id', :org, true), set_config('aio.user_id', :usr, true)"),
+                    {"org": str(org_id), "usr": str(user_id)},
+                )
+                connection.execute(text("SET LOCAL statement_timeout = '10s'"))
+                connection.execute(text("SET LOCAL lock_timeout = '3s'"))
+                yield connection
 
     @contextmanager
     def bootstrap(self) -> Iterator[Connection]:
