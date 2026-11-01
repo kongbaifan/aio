@@ -1,6 +1,6 @@
 # 平台持久审计与结构化元数据契约
 
-> 当前代码契约（GOV-02 Slice A + B），不是合规认证或生产 Gate。实现：`app/observability/{audit,redaction,archive}.py`、`app/db/schema_v1{4,5}.py`、`migrations/versions/001{4_audit_records,5_audit_archive}.py`、`app/db/{engine,provisioning}.py`。计划与证据见 [实施计划](../implementation/audit-redaction-plan.md)。
+> 当前代码契约（GOV-02 Slice A + B），不是合规认证或生产 Gate。实现：`app/observability/{audit,redaction,archive,archive_http}.py`、`run_worker.py`、`app/db/schema_v1{4,5}.py`、`migrations/versions/001{4_audit_records,5_audit_archive}.py`、`app/db/{engine,provisioning}.py`。计划与证据见 [实施计划](../implementation/audit-redaction-plan.md)。
 
 ## 1. 语义
 
@@ -45,7 +45,9 @@
   3. **finish**：短事务，**以 `lease_owner` 为栅栏**：失去租约（已被另一 relay 接管）的旧 relay 什么都改不了。成功写 `delivered_at`；失败 `attempts+1`、`next_attempt_at` 指数退避（5s 起翻倍，上限 15 min，无上限次数，不丢弃事实），`last_error_code` 只存固定词表（`ARCHIVE_UNAVAILABLE / REJECTED / TIMEOUT / DELIVERY_FAILED / RECORD_INVALID`），sink 的异常文本从不入库或写日志。
 - 租约必须长于发送超时（构造时校验），否则另一个 relay 可能在发送中途接管。
 - **两类故障分离**：PG 审计写失败是 `AUDIT_SINK_UNAVAILABLE`，拒绝动作；归档不可达只表现为 backlog。`backlog()` 返回待投递数、重试中数、最老待投递秒数和错误码计数；超过 `backlog_alert_seconds` 时为 `AUDIT_ARCHIVE_BACKLOG`，`serve()` 只记一条 warning（组织与计数，无内容）。这个码不进入任何业务响应。
-- **当前边界**：只有契约一致的 fake sink；**没有真实归档/SIEM 适配器，`run_worker.py` 也未启动 relay**，因此部署后指针会累积在 outbox 中（PG 事实不受影响），接入适配器后从最早的事实开始补投。backlog 未导出为指标，也没有管理 API。
+- **HTTPS 收集端适配器**（`app/observability/archive_http.py`）：每条记录一次 `POST <PLATFORM_AUDIT_ARCHIVE_URL>`，正文是 `ArchiveRecord` JSON，带 `Authorization: Bearer <PLATFORM_AUDIT_ARCHIVE_TOKEN>` 与 `Idempotency-Key: <org_id>:<audit_id>`。收集端必须按该键只存一次：2xx 或 409（已存在）视为已投递；408/425/429/5xx 与连接错误为 `ARCHIVE_UNAVAILABLE`，超时为 `ARCHIVE_TIMEOUT`，3xx（从不跟随重定向）与其他 4xx 为 `ARCHIVE_REJECTED`，都按上面的退避继续重试。不读取响应正文，不读取代理环境变量；异常链被截断。
+- **Worker 接入**：`run_worker.py` 在配置收集端后以 `<worker_id[:110]>-audit-archive` 为租约身份启动本组织的 relay，随 Worker 的 `stopping` 停止。多个 Worker 同时运行时靠 `SKIP LOCKED` 与租约栅栏分摊，不重复投递。`platform-production` 未配置收集端时 Worker 拒绝启动；`platform-test` 可以不配（只允许回环 HTTP）。收集端凭据必须与 Manager/连接器凭据不同，并登记为进程密钥（日志与出口脱敏会替换它）。
+- **当前边界**：没有对接具体 SIEM 产品，也没有 WORM 存储；收集端需自行满足按键去重与不可变保存。backlog 仍只写 warning 日志，未导出为指标，也没有管理 API。
 
 ## 3b. 出口脱敏（GOV-02.04，Slice C）
 
@@ -82,4 +84,4 @@
 
 ## 6. 未包含（见计划第 7、8 节）
 
-真实归档适配器、relay 进程接入与 backlog 指标导出（见 3a）；`x-aio-sensitive` schema 标记、五出口统一 `scrub()`、替换 `_SECRET_PATTERN` 与网关 `replace`（Slice C）；保留策略（OPS-03）；support grant（GOV-05）；kill switch（GOV-04）；真实 SIEM/归档后端。
+具体 SIEM/WORM 后端对接与 backlog 指标导出（见 3a）；`x-aio-sensitive` schema 标记、五出口统一 `scrub()`、替换 `_SECRET_PATTERN` 与网关 `replace`（Slice C）；保留策略（OPS-03）；support grant（GOV-05）；kill switch（GOV-04）；真实 SIEM/归档后端。

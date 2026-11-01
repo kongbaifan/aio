@@ -176,6 +176,8 @@ DB 侧兜底：2.1 的 `pg_column_size(metadata) <= 4096` 使大段正文即使�
 ## 6. 执行与证据清单
 
 > 2026-10-25 进度：Slice A 已落地并有真实 PG 证据（`tests/platform/test_audit_integration.py`、`test_audit_contracts.py`），已合入 master（kongbaifan/aio#1）。Slice B 的 relay 已落地（`app/observability/archive.py`、v15、`tests/platform/test_audit_relay.py`），只验收 fake sink，未接真实适配器/进程。Slice C 出口脱敏已落地（`app/observability/scrub.py`、`tests/platform/test_scrub_*.py`）。逐项状态与偏差写在各条下方的「实际」行，未勾选项不代表部分完成可以当作完成。
+>
+> 2026-11-01 进度：Slice B 补上 HTTPS 收集端适配器（`app/observability/archive_http.py`）并由 `run_worker.py` 启动 relay；生产 Worker 未配置收集端即拒绝启动。证据 `tests/platform/test_audit_archive_http.py`（31 项，其中 3 项真实 PG + 回环收集端）。下文 Slice B「`run_worker.py` 未启动 relay」一句是 2026-10-25 的状态。仍未对接具体 SIEM/WORM，backlog 未导出为指标。
 
 - [x] v14 迁移、审计扩列、outbox 投递簿记与 runtime 最小权限。
   **实际**：真 PG 从 `0013_shared_budgets` 升级、legacy 行逐字段不变、新自由 metadata 被拒、仅 legacy 时可降级、存在结构化行时降级拒绝；runtime 对审计 UPDATE/DELETE 及 outbox `payload`/`kind`/`aggregate_id` UPDATE、DELETE 均为 `42501`，六个簿记列可改；启动校验对多授的审计列 UPDATE 报错（负控）。4 KiB 上限实测按未压缩值计算，可压缩大字段同样被拒。实施中发现并修复：CHECK 字符串中的 `':v1'` 被 SQLAlchemy 当作绑定参数渲染为 `'NULL'`，导致全部结构化写入失败；已加不依赖 PG 的 DDL 渲染回归用例。
