@@ -69,6 +69,7 @@ class MaterialLogFilter:
 
 SETTINGS_SECRETS = (
     "oidc_client_secret", "manager_token", "manager_control_token", "connector_token", "connector_control_token",
+    "audit_archive_token",
 )
 
 

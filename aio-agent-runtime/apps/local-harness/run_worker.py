@@ -5,6 +5,8 @@ import signal
 
 from app.db.engine import Database
 from app.observability import scrub
+from app.observability.archive import AuditRelay
+from app.observability.archive_http import HttpArchiveSink
 from app.platform_settings import DeploymentMode, WorkerSettings
 from app.runtime.execution import ExecutionStore
 from app.runtime.model_client import ModelFactory
@@ -28,6 +30,14 @@ from app.knowledge.embedding import EmbeddingStore, Embedder
 from app.knowledge.embedding_client import EmbeddingFactory
 from app.knowledge.retrieval import KnowledgeDriver, KnowledgeRetrieval
 from app.knowledge.worker import KnowledgeWorker
+
+
+def audit_relay(db, settings):
+    """The org's audit archive relay; production settings guarantee a collector is configured."""
+    if not settings.audit_archive_url:
+        return None
+    sink = HttpArchiveSink(settings.audit_archive_url, settings.audit_archive_token)
+    return AuditRelay(db, settings.org_id, settings.worker_id[:110] + "-audit-archive", sink)
 
 
 async def main():
@@ -58,6 +68,7 @@ async def main():
     embedder = Embedder(EmbeddingStore(db, settings, knowledge_jobs, store), EmbeddingFactory(settings))
     registry["knowledge.search"] = KnowledgeDriver(KnowledgeRetrieval(db, store, embedder))
     worker = DurableWorker(store, settings.org_id, settings.worker_id, factory, ToolDrivers(registry))
+    relay = audit_relay(db, settings)
     loop = asyncio.get_running_loop()
     for name in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -66,6 +77,8 @@ async def main():
             pass
     try:
         tasks = [worker.serve()]
+        if relay:
+            tasks.append(relay.serve(worker.stopping))
         if manager_client:
             from app.workspaces.checkpoints import maintain_checkpoints
 
@@ -105,6 +118,8 @@ async def main():
             )
         await asyncio.gather(*tasks)
     finally:
+        if relay:
+            await relay.sink.close()
         if manager_client:
             await manager_client.close()
         if connector_client:

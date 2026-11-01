@@ -226,6 +226,21 @@ def _connector_service(source, production, *, control=False):
     return url, token, authority
 
 
+def _audit_archive(source, production, *, other_tokens=()):
+    url = source.get("PLATFORM_AUDIT_ARCHIVE_URL", "").strip() or None
+    token = _optional_secret(source, "PLATFORM_AUDIT_ARCHIVE_TOKEN")
+    if url:
+        url = validate_endpoint(url, "PLATFORM_AUDIT_ARCHIVE_URL", production=production)
+        if not token or token in {t for t in other_tokens if t}:
+            raise PlatformConfigurationError("Audit archive requires its own explicit collector credential")
+    elif token:
+        raise PlatformConfigurationError("Audit archive credential requires an explicit collector URL")
+    elif production:
+        # Without a sink, audit.archive pointers would accumulate in the outbox unnoticed.
+        raise PlatformConfigurationError("Production worker requires an audit archive collector")
+    return url, token
+
+
 def _connector_profiles(source, production):
     import json
     from .runtime.actions import canonical_digest
@@ -462,6 +477,8 @@ class WorkerSettings:
     connector_token: str | None = field(default=None, repr=False)
     sandbox_profiles: tuple[dict, ...] = ()
     skill_import_profile: str | None = None
+    audit_archive_url: str | None = None
+    audit_archive_token: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -501,6 +518,9 @@ class WorkerSettings:
         elif manager_token:
             raise PlatformConfigurationError("Manager token requires an explicit manager URL")
         profiles = _sandbox_profiles(source)
+        archive_url, archive_token = _audit_archive(
+            source, production, other_tokens=(manager_token, connector_token)
+        )
         return cls(
             mode=mode,
             database_url=database_url,
@@ -510,6 +530,8 @@ class WorkerSettings:
             manager_token=manager_token,
             connector_url=connector_url,
             connector_token=connector_token,
+            audit_archive_url=archive_url,
+            audit_archive_token=archive_token,
             sandbox_profiles=profiles,
             skill_import_profile=_skill_import_profile(source, profiles),
             worker_id=worker_id,
