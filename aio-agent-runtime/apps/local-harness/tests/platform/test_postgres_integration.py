@@ -138,6 +138,30 @@ def test_project_shared_does_not_share_private_conversation(tenant):
     assert t["service"].list_sessions(t["bob"]) == []
 
 
+def test_run_detail_reads_run_and_checkpoint_from_one_snapshot(tenant, monkeypatch):
+    t = tenant
+    run_id = create_run(t)["run_id"]
+    from app.workspaces import checkpoints
+
+    original, seen = checkpoints.checkpoint_view, {}
+
+    def commit_between_reads(c, run):
+        # A worker commit lands after the Run row was read but before the checkpoint is read.
+        with t["admin"].begin() as other:
+            other.execute(update(s.runs).where(s.runs.c.id == run["id"]).values(revision=s.runs.c.revision + 7))
+        seen["revision"] = c.execute(select(s.runs.c.revision).where(s.runs.c.id == run["id"])).scalar_one()
+        return original(c, run)
+
+    monkeypatch.setattr(checkpoints, "checkpoint_view", commit_between_reads)
+    detail = t["service"].get_run(t["alice"], run_id)
+    assert seen["revision"] == detail["revision"]  # later reads see the same snapshot, not the new commit
+    monkeypatch.setattr(checkpoints, "checkpoint_view", original)
+    assert t["service"].get_run(t["alice"], run_id)["revision"] == detail["revision"] + 7
+    with t["db"].transaction(t["alice"]) as c:
+        # The pooled connection is back to the default level for every other transaction.
+        assert c.execute(text("SHOW transaction_isolation")).scalar_one() == "read committed"
+
+
 def test_atomic_run_commit_and_idempotent_replay(tenant):
     t = tenant
     key = secrets.token_hex(16)

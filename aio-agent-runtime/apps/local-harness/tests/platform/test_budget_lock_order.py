@@ -93,8 +93,8 @@ def _observed_prefix(t, monkeypatch, held_pool_id, callback):
     original = t["db"].scoped
 
     @contextmanager
-    def traced(org_id, user_id):
-        with original(org_id, user_id) as connection:
+    def traced(org_id, user_id, **options):
+        with original(org_id, user_id, **options) as connection:
             if threading.current_thread().name.startswith("budget-prefix"):
                 pids.put(connection.connection.driver_connection.info.backend_pid)
             yield connection

@@ -24,8 +24,8 @@ def _lock_prefix(t, monkeypatch, run_id, callback, *, organization):
     original_scope = t["db"].scoped
 
     @contextmanager
-    def observed_scope(org, user):
-        with original_scope(org, user) as connection:
+    def observed_scope(org, user, **options):
+        with original_scope(org, user, **options) as connection:
             if threading.current_thread().name.startswith("lifecycle-receipt"):
                 backend.put(connection.connection.driver_connection.info.backend_pid)
             yield connection
